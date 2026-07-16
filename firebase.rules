@@ -5,30 +5,64 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function userCompanyId() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.companyId;
+    function userPath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
+    }
+
+    function hasUserProfile() {
+      return signedIn() && exists(userPath());
+    }
+
+    function currentUser() {
+      return get(userPath()).data;
     }
 
     function sameCompany(companyId) {
-      return signedIn() && userCompanyId() == companyId;
+      return hasUserProfile() && currentUser().companyId == companyId;
+    }
+
+    function isAdmin() {
+      return hasUserProfile() && currentUser().role == "administrateur";
+    }
+
+    function companyIdIsUnchanged() {
+      return request.resource.data.companyId == resource.data.companyId;
+    }
+
+    function hasRequiredCompanyId() {
+      return request.resource.data.companyId is string;
     }
 
     match /companies/{companyId} {
       allow read: if sameCompany(companyId);
-      allow write: if sameCompany(companyId)
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "administrateur";
+      allow create: if false;
+      allow update: if sameCompany(companyId) && isAdmin();
+      allow delete: if false;
     }
 
     match /users/{userId} {
-      allow read: if signedIn() && sameCompany(resource.data.companyId);
-      allow create: if signedIn() && sameCompany(request.resource.data.companyId);
-      allow update: if signedIn() && sameCompany(resource.data.companyId);
+      allow read: if sameCompany(resource.data.companyId);
+      allow create: if isAdmin() && hasRequiredCompanyId() && sameCompany(request.resource.data.companyId);
+      allow update: if sameCompany(resource.data.companyId)
+        && companyIdIsUnchanged()
+        && (request.auth.uid == userId || isAdmin())
+        && (!request.resource.data.diff(resource.data).changedKeys().hasAny(["role"]) || isAdmin());
+      allow delete: if isAdmin() && sameCompany(resource.data.companyId);
     }
 
-    match /{collection}/{documentId} {
-      allow read: if signedIn() && sameCompany(resource.data.companyId);
-      allow create: if signedIn() && sameCompany(request.resource.data.companyId);
-      allow update, delete: if signedIn() && sameCompany(resource.data.companyId);
+    match /interventions/{interventionId} {
+      allow read: if sameCompany(resource.data.companyId);
+      allow create: if hasRequiredCompanyId()
+        && sameCompany(request.resource.data.companyId)
+        && request.resource.data.authorId == request.auth.uid;
+      allow update: if sameCompany(resource.data.companyId)
+        && companyIdIsUnchanged()
+        && request.resource.data.authorId == resource.data.authorId;
+      allow delete: if isAdmin() && sameCompany(resource.data.companyId);
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }

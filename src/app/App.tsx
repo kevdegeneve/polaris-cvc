@@ -1,5 +1,5 @@
 import type React from "react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   BookOpen,
   BriefcaseBusiness,
@@ -18,8 +18,10 @@ import {
 } from "lucide-react";
 import { AppData, InterventionDraft, InterventionResult, TechnicalDocument } from "../domain/types";
 import { makeSearchIndex, validateInterventionDraft } from "../domain/validation";
+import { getFirebaseAuthState, signIn, signOutCurrentSession, type AuthSession } from "../services/authService";
 import { createFirebaseServices } from "../services/firebaseClient";
-import { repository } from "../services/localRepository";
+import { createSeedData } from "../services/localRepository";
+import { createAppRepository, type AppRepository } from "../services/repository";
 import { openPrintableReport } from "../services/reportService";
 
 type View =
@@ -55,16 +57,23 @@ const emptyDraft: InterventionDraft = {
 };
 
 export function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [session, setSession] = useState<AuthSession | null>(null);
+  const [appRepository, setAppRepository] = useState<AppRepository>(() => createAppRepository());
+  const [authEmail, setAuthEmail] = useState("mila@polaris.local");
+  const [authPassword, setAuthPassword] = useState("demo-polaris");
+  const [authError, setAuthError] = useState("");
+  const [statusMessage, setStatusMessage] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
   const [view, setView] = useState<View>("home");
-  const [data, setData] = useState(() => repository.load());
+  const [data, setData] = useState(() => createSeedData());
   const [selectedInterventionId, setSelectedInterventionId] = useState(data.interventions[0]?.id ?? "");
   const [draft, setDraft] = useState<InterventionDraft>(emptyDraft);
   const [query, setQuery] = useState("");
   const [errors, setErrors] = useState<string[]>([]);
   const firebaseReady = useMemo(() => Boolean(createFirebaseServices()), []);
 
-  const currentUser = data.users[0];
+  const isAuthenticated = Boolean(session);
+  const currentUser = data.users.find((item) => item.id === session?.userId) || data.users[0];
   const selectedIntervention = data.interventions.find((item) => item.id === selectedInterventionId);
   const activeInterventions = data.interventions.filter((item) => item.contentStatus === "brouillon");
 
@@ -94,11 +103,70 @@ export function App() {
     setView("detail");
   }
 
-  function submitIntervention() {
+  useEffect(() => {
+    const unsubscribe = getFirebaseAuthState((user) => {
+      if (!user) return;
+      const nextSession: AuthSession = {
+        mode: "firebase",
+        userId: user.uid,
+        email: user.email || ""
+      };
+      setSession(nextSession);
+      void loadData(nextSession.userId);
+    });
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, []);
+
+  async function loadData(userId?: string) {
+    setIsLoading(true);
+    setAuthError("");
+    try {
+      const nextRepository = createAppRepository(userId);
+      const nextData = await nextRepository.load(userId);
+      setAppRepository(nextRepository);
+      setData(nextData);
+      setSelectedInterventionId(nextData.interventions[0]?.id ?? "");
+      setStatusMessage(nextRepository.mode === "firestore" ? "Mode cloud Firestore actif." : "Mode local actif.");
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Chargement impossible.");
+      const fallbackRepository = createAppRepository();
+      const fallbackData = await fallbackRepository.load();
+      setAppRepository(fallbackRepository);
+      setData(fallbackData);
+      setSession({
+        mode: "local",
+        userId: fallbackData.users[0].id,
+        email: fallbackData.users[0].email
+      });
+      setStatusMessage("Firestore indisponible. Mode local actif.");
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  async function handleSignIn(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsLoading(true);
+    setAuthError("");
+    try {
+      const result = await signIn(authEmail, authPassword);
+      setSession(result.session);
+      await loadData(result.session.mode === "firebase" ? result.session.userId : undefined);
+      setStatusMessage(result.fallbackReason || "Connexion Firebase active.");
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Connexion impossible.");
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  async function submitIntervention() {
     const result = validateInterventionDraft(draft);
     setErrors(result.errors);
     if (!result.ok) return;
-    const next = repository.createIntervention(data, draft, currentUser.id);
+    const next = await appRepository.createIntervention(data, draft, currentUser.id);
     setData(next);
     const created = next.interventions[0];
     setSelectedInterventionId(created.id);
@@ -108,14 +176,14 @@ export function App() {
 
   async function addPhoto(file: File, interventionId: string) {
     const reader = new FileReader();
-    reader.onload = () => {
-      const next = repository.addMedia(data, interventionId, file, String(reader.result));
+    reader.onload = async () => {
+      const next = await appRepository.addMedia(data, interventionId, file, String(reader.result));
       setData(next);
     };
     reader.readAsDataURL(file);
   }
 
-  function addDocument(event: React.FormEvent<HTMLFormElement>) {
+  async function addDocument(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const document: Omit<TechnicalDocument, "id" | "companyId" | "createdAt" | "updatedAt"> = {
@@ -131,8 +199,15 @@ export function App() {
       officialStatus: "a_verifier",
       fileName: String(form.get("fileName") || "")
     };
-    setData(repository.addDocument(data, document));
+    setData(await appRepository.addDocument(data, document));
     event.currentTarget.reset();
+  }
+
+  async function handleSignOut() {
+    await signOutCurrentSession();
+    setSession(null);
+    setView("home");
+    setStatusMessage("");
   }
 
   if (!isAuthenticated) {
@@ -145,17 +220,20 @@ export function App() {
           <p className="muted">
             Base professionnelle mobile-first. Firebase est {firebaseReady ? "configure" : "pret a configurer"}.
           </p>
-          <label>
-            Email
-            <input defaultValue="mila@polaris.local" inputMode="email" />
-          </label>
-          <label>
-            Mot de passe
-            <input defaultValue="demo-polaris" type="password" />
-          </label>
-          <button className="primary large" onClick={() => setIsAuthenticated(true)}>
-            <ShieldCheck size={22} /> Se connecter
-          </button>
+          {statusMessage && <p className="notice">{statusMessage}</p>}
+          {authError && <p className="auth-error">{authError}</p>}
+            <label>
+              Email
+              <input value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} inputMode="email" />
+            </label>
+            <label>
+              Mot de passe
+              <input value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} type="password" />
+            </label>
+            <button className="primary large" disabled={isLoading}>
+              <ShieldCheck size={22} /> {isLoading ? "Connexion..." : "Se connecter"}
+            </button>
+          </form>
         </section>
       </main>
     );
@@ -224,7 +302,7 @@ export function App() {
             intervention={selectedIntervention}
             onPhoto={addPhoto}
             onReport={() => openPrintableReport(data, selectedIntervention)}
-            onComplete={() => setData(repository.updateInterventionStatus(data, selectedIntervention.id, "termine"))}
+            onComplete={async () => setData(await appRepository.updateInterventionStatus(data, selectedIntervention.id, "termine"))}
           />
         )}
 
@@ -275,7 +353,8 @@ export function App() {
         {view === "profile" && (
           <section className="stack">
             <InfoCard title={currentUser.displayName} subtitle={roleLabel(currentUser.role)} icon={<Users />} />
-            <button className="secondary" onClick={() => setIsAuthenticated(false)}>
+            <InfoCard title="Stockage" subtitle={appRepository.mode === "firestore" ? "Firestore actif" : "Mode local"} icon={<ShieldCheck />} />
+            <button className="secondary" onClick={handleSignOut}>
               <LogOut size={20} /> Deconnexion
             </button>
           </section>

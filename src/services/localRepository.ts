@@ -6,6 +6,7 @@ import {
   MediaItem,
   TechnicalDocument
 } from "../domain/types";
+import type { AppRepository } from "./repository";
 
 const STORAGE_KEY = "polaris-cvc-demo-data";
 const COMPANY_ID = "company-polaris-demo";
@@ -156,8 +157,14 @@ export function createSeedData(): AppData {
   };
 }
 
-export class LocalRepository {
-  load(): AppData {
+export class LocalRepository implements AppRepository {
+  mode = "local" as const;
+
+  async load(): Promise<AppData> {
+    return this.loadSync();
+  }
+
+  loadSync(): AppData {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) {
       const seed = createSeedData();
@@ -171,7 +178,7 @@ export class LocalRepository {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   }
 
-  createIntervention(data: AppData, draft: InterventionDraft, authorId = TECH_ID): AppData {
+  async createIntervention(data: AppData, draft: InterventionDraft, authorId = TECH_ID): Promise<AppData> {
     const timestamp = now();
     const intervention: Intervention = {
       ...draft,
@@ -207,7 +214,7 @@ export class LocalRepository {
     return next;
   }
 
-  updateInterventionStatus(data: AppData, interventionId: string, contentStatus: ContentStatus): AppData {
+  async updateInterventionStatus(data: AppData, interventionId: string, contentStatus: ContentStatus): Promise<AppData> {
     const next = {
       ...data,
       interventions: data.interventions.map((item) =>
@@ -225,7 +232,7 @@ export class LocalRepository {
     return next;
   }
 
-  addMedia(data: AppData, interventionId: string, file: File, dataUrl: string): AppData {
+  async addMedia(data: AppData, interventionId: string, file: File, dataUrl: string): Promise<AppData> {
     const timestamp = now();
     const item: MediaItem = {
       id: id("media"),
@@ -242,7 +249,10 @@ export class LocalRepository {
     return next;
   }
 
-  addDocument(data: AppData, document: Omit<TechnicalDocument, "id" | "companyId" | "createdAt" | "updatedAt">): AppData {
+  async addDocument(
+    data: AppData,
+    document: Omit<TechnicalDocument, "id" | "companyId" | "createdAt" | "updatedAt">
+  ): Promise<AppData> {
     const timestamp = now();
     const next = {
       ...data,

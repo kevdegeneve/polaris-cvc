@@ -35,6 +35,11 @@ button {
   cursor: pointer;
 }
 
+button:disabled {
+  cursor: wait;
+  opacity: .72;
+}
+
 .login-screen {
   min-height: 100dvh;
   display: grid;
@@ -53,6 +58,31 @@ button {
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.26);
   display: grid;
   gap: 16px;
+}
+
+.login-form {
+  display: grid;
+  gap: 16px;
+}
+
+.notice,
+.auth-error {
+  margin: 0;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-weight: 800;
+}
+
+.notice {
+  background: #e8f7f5;
+  color: #07565e;
+  border: 1px solid #bde7e0;
+}
+
+.auth-error {
+  background: var(--danger-bg);
+  color: var(--danger);
+  border: 1px solid #ffd1c8;
 }
 
 .brand-mark {

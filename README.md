@@ -18,7 +18,8 @@ Chaque document metier contient `companyId` pour eviter l'acces entre entreprise
 
 ## Fonctionnel inclus
 
-- Connexion demo.
+- Connexion Firebase Auth si Firebase est configure.
+- Fallback local si Firebase n'est pas configure ou si Firestore est indisponible.
 - Accueil avec gros acces rapides.
 - Creation d'intervention en parcours structure.
 - Sauvegarde locale automatique via `localStorage`.
@@ -64,6 +65,34 @@ VITE_FIREBASE_APP_ID=
 ```
 
 Ne jamais mettre de cle secrete serveur dans le client.
+
+## Firebase Auth et Firestore
+
+La couche d'acces aux donnees passe par une interface de repository :
+
+- `LocalRepository` : mode local de secours avec `localStorage`.
+- `FirestoreRepository` : mode cloud pour `companies`, `users` et `interventions`.
+
+Le choix est automatique :
+
+- si les variables Firebase sont absentes, l'application reste en mode local ;
+- si Firebase est configure et qu'un utilisateur est connecte, l'application lit Firestore ;
+- si le profil utilisateur ou l'entreprise est introuvable dans Firestore, l'application revient en mode local.
+
+Collections Firestore branchees dans cette etape :
+
+- `companies/{companyId}` ;
+- `users/{uid}` avec `companyId`, `displayName`, `email` et `role` ;
+- `interventions/{interventionId}` avec `companyId`, `authorId` et les champs metier.
+
+Le premier administrateur et son entreprise doivent etre crees depuis la console Firebase ou un script admin serveur. Les regles client refusent la creation libre d'une entreprise afin d'eviter qu'un utilisateur puisse choisir lui-meme son `companyId`.
+
+Les regles `firebase.rules` imposent :
+
+- lecture/ecriture uniquement si le profil utilisateur existe ;
+- acces limite au `companyId` de l'utilisateur connecte ;
+- interdiction de modifier le `companyId` d'un document existant ;
+- modification des roles reservee aux administrateurs.
 
 ## Verification
 
