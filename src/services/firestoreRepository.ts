@@ -19,6 +19,7 @@ import {
   AppUser,
   Company,
   ContentStatus,
+  DocumentImportCandidate,
   Intervention,
   InterventionDraft,
   TechnicalDocument
@@ -36,7 +37,7 @@ function fromFirestore<T extends { id: string }>(idValue: string, value: Record<
     id: idValue,
     createdAt: typeof value.createdAt === "string" ? value.createdAt : now(),
     updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : now()
-  } as T;
+  } as unknown as T;
 }
 
 export class FirestoreRepository implements AppRepository {
@@ -63,14 +64,21 @@ export class FirestoreRepository implements AppRepository {
     const users = await this.loadUsers(user.companyId);
     const interventions = await this.loadInterventions(user.companyId);
     const seed = createSeedData();
+    const localData = this.local.loadSync();
 
     return {
       ...seed,
       company,
       users,
       interventions,
-      media: this.local.loadSync().media.filter((item) => item.companyId === user.companyId),
-      documents: seed.documents.map((item) => ({ ...item, companyId: user.companyId })),
+      media: localData.media.filter((item) => item.companyId === user.companyId),
+      equipmentIdentifications: localData.equipmentIdentifications.filter((item) => item.companyId === user.companyId),
+      documents: localData.documents.filter((item) => item.companyId === user.companyId),
+      documentLinks: localData.documentLinks.filter((item) => item.companyId === user.companyId),
+      documentFavorites: localData.documentFavorites.filter((item) => item.companyId === user.companyId),
+      documentRecentViews: localData.documentRecentViews.filter((item) => item.companyId === user.companyId),
+      documentImportBatches: localData.documentImportBatches.filter((item) => item.companyId === user.companyId),
+      documentImportCandidates: localData.documentImportCandidates.filter((item) => item.companyId === user.companyId),
       aiAnalyses: seed.aiAnalyses.map((item) => ({ ...item, companyId: user.companyId }))
     };
   }
@@ -151,6 +159,18 @@ export class FirestoreRepository implements AppRepository {
     document: Omit<TechnicalDocument, "id" | "companyId" | "createdAt" | "updatedAt">
   ): Promise<AppData> {
     return this.local.addDocument(data, document);
+  }
+
+  async importDocumentCandidates(data: AppData, candidates: DocumentImportCandidate[], userId: string): Promise<AppData> {
+    return this.local.importDocumentCandidates(data, candidates, userId);
+  }
+
+  async toggleDocumentFavorite(data: AppData, documentId: string, userId: string): Promise<AppData> {
+    return this.local.toggleDocumentFavorite(data, documentId, userId);
+  }
+
+  async recordDocumentView(data: AppData, documentId: string, userId: string): Promise<AppData> {
+    return this.local.recordDocumentView(data, documentId, userId);
   }
 
   async ensureUserProfile(user: AppUser, company: Company): Promise<void> {

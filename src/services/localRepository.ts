@@ -1,11 +1,16 @@
 import {
   AppData,
   ContentStatus,
+  DocumentFavorite,
+  DocumentImportBatch,
+  DocumentImportCandidate,
+  DocumentRecentView,
   Intervention,
   InterventionDraft,
   MediaItem,
   TechnicalDocument
 } from "../domain/types";
+import { buildDocumentSearchIndex } from "./documentLibraryService";
 import type { AppRepository } from "./repository";
 
 const STORAGE_KEY = "polaris-cvc-demo-data";
@@ -89,6 +94,7 @@ export function createSeedData(): AppData {
         updatedAt: timestamp
       }
     ],
+    equipmentIdentifications: [],
     interventions: [
       {
         id: "intervention-demo-1",
@@ -120,27 +126,12 @@ export function createSeedData(): AppData {
     ],
     measurements: [],
     media: [],
-    documents: [
-      {
-        id: "document-carrier-30rbp",
-        companyId: COMPANY_ID,
-        title: "Manuel service Carrier 30RBP",
-        brand: "Carrier",
-        range: "AquaSnap",
-        compatibleModel: "30RBP",
-        documentType: "manuel",
-        language: "fr",
-        version: "2025.1",
-        documentDate: "2025-06-01",
-        source: "Portail constructeur",
-        addedByUserId: "user-samir",
-        officialStatus: "a_verifier",
-        fileName: "carrier-30rbp-service.pdf",
-        createdAt: timestamp,
-        updatedAt: timestamp
-      }
-    ],
+    documents: [],
     documentLinks: [],
+    documentFavorites: [],
+    documentRecentViews: [],
+    documentImportBatches: [],
+    documentImportCandidates: [],
     aiAnalyses: [
       {
         id: "ai-placeholder-1",
@@ -171,7 +162,7 @@ export class LocalRepository implements AppRepository {
       this.save(seed);
       return seed;
     }
-    return JSON.parse(raw) as AppData;
+    return migrateAppData(JSON.parse(raw) as AppData);
   }
 
   save(data: AppData): void {
@@ -254,18 +245,86 @@ export class LocalRepository implements AppRepository {
     document: Omit<TechnicalDocument, "id" | "companyId" | "createdAt" | "updatedAt">
   ): Promise<AppData> {
     const timestamp = now();
+    const item: TechnicalDocument = {
+      ...document,
+      id: id("document"),
+      companyId: data.company.id,
+      searchIndex: document.searchIndex || buildDocumentSearchIndex(document),
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
     const next = {
       ...data,
-      documents: [
-        {
-          ...document,
-          id: id("document"),
-          companyId: data.company.id,
-          createdAt: timestamp,
-          updatedAt: timestamp
-        },
-        ...data.documents
-      ]
+      documents: [item, ...data.documents]
+    };
+    this.save(next);
+    return next;
+  }
+
+  async importDocumentCandidates(data: AppData, candidates: DocumentImportCandidate[], userId: string): Promise<AppData> {
+    const timestamp = now();
+    const batchIds = Array.from(new Set(candidates.map((candidate) => candidate.batchId)));
+    const batches: DocumentImportBatch[] = batchIds.map((batchId) => ({
+      id: batchId,
+      companyId: data.company.id,
+      folderName: "Import dossier",
+      sourceType: "import_dossier",
+      importedByUserId: userId,
+      totalFiles: candidates.filter((candidate) => candidate.batchId === batchId).length,
+      status: "pret_validation",
+      createdAt: timestamp,
+      updatedAt: timestamp
+    }));
+
+    const next = {
+      ...data,
+      documentImportBatches: [...batches, ...data.documentImportBatches],
+      documentImportCandidates: [...candidates, ...data.documentImportCandidates]
+    };
+    this.save(next);
+    return next;
+  }
+
+  async toggleDocumentFavorite(data: AppData, documentId: string, userId: string): Promise<AppData> {
+    const existing = data.documentFavorites.find((item) => item.documentId === documentId && item.userId === userId);
+    const nextFavorites = existing
+      ? data.documentFavorites.filter((item) => item.id !== existing.id)
+      : [
+          {
+            id: id("favorite"),
+            companyId: data.company.id,
+            documentId,
+            userId,
+            createdAt: now(),
+            updatedAt: now()
+          },
+          ...data.documentFavorites
+        ];
+    const next = { ...data, documentFavorites: nextFavorites };
+    this.save(next);
+    return next;
+  }
+
+  async recordDocumentView(data: AppData, documentId: string, userId: string): Promise<AppData> {
+    const timestamp = now();
+    const recentView: DocumentRecentView = {
+      id: id("recent-document"),
+      companyId: data.company.id,
+      documentId,
+      userId,
+      viewedAt: timestamp,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
+    const next = {
+      ...data,
+      documents: data.documents.map((document) =>
+        document.id === documentId ? { ...document, lastViewedAt: timestamp, updatedAt: timestamp } : document
+      ),
+      documentRecentViews: [
+        recentView,
+        ...data.documentRecentViews.filter((item) => !(item.documentId === documentId && item.userId === userId))
+      ].slice(0, 50)
     };
     this.save(next);
     return next;
@@ -273,3 +332,30 @@ export class LocalRepository implements AppRepository {
 }
 
 export const repository = new LocalRepository();
+
+function migrateAppData(data: AppData): AppData {
+  return {
+    ...data,
+    documents: (data.documents || []).map((document) => ({
+      ...document,
+      productFamily: document.productFamily,
+      model: document.model || document.compatibleModel,
+      keywords: document.keywords || [],
+      tags: document.tags || [],
+      language: document.language || "FR",
+      sourceType: document.sourceType || "manuel",
+      searchIndex: document.searchIndex || buildDocumentSearchIndex(document),
+      indexStatus: document.indexStatus || "metadonnees"
+    })),
+    documentLinks: (data.documentLinks || []).map((link) => ({
+      ...link,
+      confidence: link.confidence ?? 1,
+      reason: link.reason || "manuel"
+    })),
+    documentFavorites: (data.documentFavorites || []) as DocumentFavorite[],
+    documentRecentViews: (data.documentRecentViews || []) as DocumentRecentView[],
+    documentImportBatches: (data.documentImportBatches || []) as DocumentImportBatch[],
+    documentImportCandidates: (data.documentImportCandidates || []) as DocumentImportCandidate[],
+    equipmentIdentifications: data.equipmentIdentifications || []
+  };
+}

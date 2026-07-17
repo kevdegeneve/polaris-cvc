@@ -2,6 +2,21 @@ export type UserRole = "technicien" | "referent_technique" | "administrateur";
 export type ContentStatus = "brouillon" | "termine" | "valide" | "a_verifier";
 export type InterventionResult = "resolu" | "provisoire" | "non_resolu" | "a_surveiller";
 export type SyncState = "synchronise" | "en_attente" | "hors_ligne";
+export type ProductFamily = "PAC" | "VRV" | "CTA" | "groupe_froid" | "regulation" | "ventilation" | "chaudiere" | "autre";
+export type TechnicalDocumentType =
+  | "notice"
+  | "schema_electrique"
+  | "manuel"
+  | "fiche_technique"
+  | "vue_eclatee"
+  | "procedure"
+  | "image"
+  | "autre";
+export type DocumentLanguage = "FR" | "EN" | "DE" | "ES" | "IT" | "multi" | "autre";
+export type DocumentImportStatus = "propose" | "valide" | "ignore" | "erreur";
+export type DocumentIndexStatus = "non_indexe" | "metadonnees" | "texte_extrait" | "pret_rag";
+export type DocumentSourceType = "manuel" | "import_dossier" | "constructeur_officiel" | "robot_constructeur";
+export type EquipmentIdentificationStatus = "pret" | "analyse" | "termine" | "erreur";
 
 export interface CompanyScoped {
   id: string;
@@ -49,6 +64,44 @@ export interface Equipment extends CompanyScoped {
   notes?: string;
 }
 
+export interface ImageCropSettings {
+  x: number;
+  y: number;
+  zoom: number;
+  rotation: 0 | 90 | 180 | 270;
+}
+
+export interface DetectedImageZone {
+  id: string;
+  label: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  confidence: number;
+}
+
+export interface EquipmentIdentification extends CompanyScoped {
+  imageName?: string;
+  imageDataUrl?: string;
+  crop: ImageCropSettings;
+  manufacturer?: string;
+  model?: string;
+  serialNumber?: string;
+  year?: number;
+  refrigerant?: string;
+  power?: string;
+  voltage?: string;
+  current?: string;
+  frequency?: string;
+  remarks?: string;
+  confidence: number;
+  detectedZones: DetectedImageZone[];
+  status: EquipmentIdentificationStatus;
+  provider: "mock" | "vision_ocr";
+  createdByUserId: string;
+}
+
 export interface Measurement extends CompanyScoped {
   interventionId: string;
   label: string;
@@ -92,15 +145,33 @@ export interface TechnicalDocument extends CompanyScoped {
   title: string;
   brand: string;
   range?: string;
+  productFamily?: ProductFamily;
+  model?: string;
+  modelAliases?: string[];
   compatibleModel?: string;
-  documentType: "notice" | "schema" | "manuel" | "fiche_technique" | "procedure" | "autre";
-  language: string;
+  documentType: TechnicalDocumentType;
+  language: DocumentLanguage;
   version?: string;
+  year?: number;
   documentDate?: string;
+  manufacturerReference?: string;
+  keywords: string[];
+  tags: string[];
+  category?: string;
   source?: string;
+  sourceType: DocumentSourceType;
+  sourceUrl?: string;
   addedByUserId: string;
   officialStatus: "officiel" | "interne" | "a_verifier";
   fileName?: string;
+  fileType?: string;
+  fileSize?: number;
+  storagePath?: string;
+  checksum?: string;
+  searchIndex: string;
+  indexStatus: DocumentIndexStatus;
+  ragChunkCount?: number;
+  lastViewedAt?: string;
 }
 
 export interface DocumentLink extends CompanyScoped {
@@ -109,6 +180,44 @@ export interface DocumentLink extends CompanyScoped {
   range?: string;
   model?: string;
   equipmentId?: string;
+  confidence: number;
+  reason: "manuel" | "marque_modele" | "reference_constructeur" | "import_propose";
+}
+
+export interface DocumentFavorite extends CompanyScoped {
+  documentId: string;
+  userId: string;
+}
+
+export interface DocumentRecentView extends CompanyScoped {
+  documentId: string;
+  userId: string;
+  viewedAt: string;
+}
+
+export interface DocumentImportBatch extends CompanyScoped {
+  folderName: string;
+  sourceType: "import_dossier" | "robot_constructeur";
+  importedByUserId: string;
+  totalFiles: number;
+  status: "analyse" | "pret_validation" | "termine" | "erreur";
+}
+
+export interface DocumentImportCandidate extends CompanyScoped {
+  batchId: string;
+  fileName: string;
+  fileType?: string;
+  fileSize?: number;
+  proposedTitle: string;
+  proposedBrand?: string;
+  proposedProductFamily?: ProductFamily;
+  proposedModel?: string;
+  proposedDocumentType: TechnicalDocumentType;
+  proposedLanguage: DocumentLanguage;
+  proposedYear?: number;
+  proposedKeywords: string[];
+  confidence: number;
+  status: DocumentImportStatus;
 }
 
 export interface AiAnalysis extends CompanyScoped {
@@ -132,11 +241,16 @@ export interface AppData {
   customers: Customer[];
   sites: Site[];
   equipment: Equipment[];
+  equipmentIdentifications: EquipmentIdentification[];
   interventions: Intervention[];
   measurements: Measurement[];
   media: MediaItem[];
   documents: TechnicalDocument[];
   documentLinks: DocumentLink[];
+  documentFavorites: DocumentFavorite[];
+  documentRecentViews: DocumentRecentView[];
+  documentImportBatches: DocumentImportBatch[];
+  documentImportCandidates: DocumentImportCandidate[];
   aiAnalyses: AiAnalysis[];
   activityLogs: ActivityLog[];
 }

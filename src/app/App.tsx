@@ -2,24 +2,58 @@ import type React from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
   BookOpen,
+  Bot,
   BriefcaseBusiness,
   Building2,
   Camera,
   CheckCircle2,
   ClipboardList,
+  Clock,
+  Crop,
+  AlertTriangle,
+  FileArchive,
   FileText,
+  FolderOpen,
+  ImagePlus,
   Home,
+  Link2,
   LogOut,
   Plus,
+  RotateCw,
+  ScanLine,
   Search,
   ShieldCheck,
+  Star,
+  Tags,
+  Upload,
   Users,
   Wrench
 } from "lucide-react";
-import { AppData, InterventionDraft, InterventionResult, TechnicalDocument } from "../domain/types";
+import {
+  AppData,
+  DocumentImportCandidate,
+  EquipmentIdentification,
+  ImageCropSettings,
+  InterventionDraft,
+  InterventionResult,
+  ProductFamily,
+  TechnicalDocument,
+  TechnicalDocumentType,
+  DocumentLanguage
+} from "../domain/types";
 import { makeSearchIndex, validateInterventionDraft } from "../domain/validation";
+import {
+  buildDocumentSearchIndex,
+  createImportCandidates,
+  documentTypeOptions,
+  findDocumentsForEquipment,
+  languageOptions,
+  productFamilyOptions,
+  searchTechnicalDocuments
+} from "../services/documentLibraryService";
 import { getFirebaseAuthState, signIn, signOutCurrentSession, type AuthSession } from "../services/authService";
 import { createFirebaseServices } from "../services/firebaseClient";
+import { identificationService } from "../services/identificationService";
 import { createSeedData } from "../services/localRepository";
 import { createAppRepository, type AppRepository } from "../services/repository";
 import { openPrintableReport } from "../services/reportService";
@@ -33,6 +67,7 @@ type View =
   | "customers"
   | "sites"
   | "equipment"
+  | "identifyEquipment"
   | "documents"
   | "team"
   | "profile"
@@ -69,6 +104,10 @@ export function App() {
   const [selectedInterventionId, setSelectedInterventionId] = useState(data.interventions[0]?.id ?? "");
   const [draft, setDraft] = useState<InterventionDraft>(emptyDraft);
   const [query, setQuery] = useState("");
+  const [documentQuery, setDocumentQuery] = useState("");
+  const [documentFamily, setDocumentFamily] = useState<ProductFamily | "">("");
+  const [documentType, setDocumentType] = useState<TechnicalDocumentType | "">("");
+  const [documentLanguage, setDocumentLanguage] = useState<DocumentLanguage | "">("");
   const [errors, setErrors] = useState<string[]>([]);
   const firebaseReady = useMemo(() => Boolean(createFirebaseServices()), []);
 
@@ -183,24 +222,47 @@ export function App() {
     reader.readAsDataURL(file);
   }
 
-  async function addDocument(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
+  async function importDocumentFolder(files: File[]) {
+    const supportedFiles = files.filter((file) => file.type === "application/pdf" || file.type.startsWith("image/") || file.name.match(/\.(pdf|png|jpe?g|webp)$/i));
+    if (supportedFiles.length === 0) return;
+    const candidates = createImportCandidates(supportedFiles, data.company.id, currentUser.id);
+    setData(await appRepository.importDocumentCandidates(data, candidates, currentUser.id));
+  }
+
+  async function addDocumentFromCandidate(candidate: DocumentImportCandidate) {
     const document: Omit<TechnicalDocument, "id" | "companyId" | "createdAt" | "updatedAt"> = {
-      title: String(form.get("title") || ""),
-      brand: String(form.get("brand") || ""),
-      range: String(form.get("range") || ""),
-      compatibleModel: String(form.get("model") || ""),
-      documentType: "fiche_technique",
-      language: "fr",
-      version: String(form.get("version") || ""),
-      source: String(form.get("source") || ""),
+      title: candidate.proposedTitle,
+      brand: candidate.proposedBrand || "A classer",
+      productFamily: candidate.proposedProductFamily,
+      model: candidate.proposedModel,
+      compatibleModel: candidate.proposedModel,
+      documentType: candidate.proposedDocumentType,
+      language: candidate.proposedLanguage,
+      year: candidate.proposedYear,
+      keywords: candidate.proposedKeywords,
+      tags: candidate.proposedProductFamily ? [candidate.proposedProductFamily] : [],
+      category: candidate.proposedDocumentType,
+      source: "Import dossier local",
+      sourceType: "import_dossier",
       addedByUserId: currentUser.id,
       officialStatus: "a_verifier",
-      fileName: String(form.get("fileName") || "")
+      fileName: candidate.fileName,
+      fileType: candidate.fileType,
+      fileSize: candidate.fileSize,
+      storagePath: `pending-local-import/${candidate.batchId}/${candidate.fileName}`,
+      searchIndex: "",
+      indexStatus: "metadonnees"
     };
+    document.searchIndex = buildDocumentSearchIndex(document);
     setData(await appRepository.addDocument(data, document));
-    event.currentTarget.reset();
+  }
+
+  async function toggleDocumentFavorite(documentId: string) {
+    setData(await appRepository.toggleDocumentFavorite(data, documentId, currentUser.id));
+  }
+
+  async function recordDocumentView(documentId: string) {
+    setData(await appRepository.recordDocumentView(data, documentId, currentUser.id));
   }
 
   async function handleSignOut() {
@@ -222,6 +284,7 @@ export function App() {
           </p>
           {statusMessage && <p className="notice">{statusMessage}</p>}
           {authError && <p className="auth-error">{authError}</p>}
+          <form className="login-form" onSubmit={handleSignIn}>
             <label>
               Email
               <input value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} inputMode="email" />
@@ -336,8 +399,27 @@ export function App() {
           />
         )}
 
+        {view === "identifyEquipment" && (
+          <EquipmentIdentificationView companyId={data.company.id} userId={currentUser.id} />
+        )}
+
         {view === "documents" && (
-          <DocumentsView documents={data.documents} onSubmit={addDocument} />
+          <TechnicalLibraryView
+            data={data}
+            userId={currentUser.id}
+            query={documentQuery}
+            productFamily={documentFamily}
+            documentType={documentType}
+            language={documentLanguage}
+            onQueryChange={setDocumentQuery}
+            onProductFamilyChange={setDocumentFamily}
+            onDocumentTypeChange={setDocumentType}
+            onLanguageChange={setDocumentLanguage}
+            onImportFolder={importDocumentFolder}
+            onCreateDocument={addDocumentFromCandidate}
+            onToggleFavorite={toggleDocumentFavorite}
+            onOpenDocument={recordDocumentView}
+          />
         )}
 
         {view === "team" && (
@@ -403,6 +485,7 @@ function HomeView({
     { label: `En cours (${activeCount})`, icon: <ClipboardList />, view: "active" as View },
     { label: "Rechercher une panne", icon: <Search />, action: onSearch },
     { label: "Documentation", icon: <BookOpen />, view: "documents" as View },
+    { label: "Identifier", icon: <ScanLine />, view: "identifyEquipment" as View },
     { label: "Equipements", icon: <Wrench />, view: "equipment" as View },
     { label: "Equipe", icon: <Users />, view: "team" as View }
   ];
@@ -617,34 +700,402 @@ function InterventionDetail({
   );
 }
 
-function DocumentsView({
-  documents,
-  onSubmit
-}: {
-  documents: AppData["documents"];
-  onSubmit: (event: React.FormEvent<HTMLFormElement>) => void;
-}) {
+const defaultCrop: ImageCropSettings = { x: 0, y: 0, zoom: 1, rotation: 0 };
+
+function EquipmentIdentificationView({ companyId, userId }: { companyId: string; userId: string }) {
+  const [imageDataUrl, setImageDataUrl] = useState("");
+  const [imageName, setImageName] = useState("");
+  const [crop, setCrop] = useState<ImageCropSettings>(defaultCrop);
+  const [identification, setIdentification] = useState<EquipmentIdentification | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [error, setError] = useState("");
+
+  function loadImage(file?: File) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      setImageDataUrl(String(reader.result));
+      setImageName(file.name);
+      setCrop(defaultCrop);
+      setIdentification(null);
+      setError("");
+    };
+    reader.readAsDataURL(file);
+  }
+
+  async function analyzeImage() {
+    if (!imageDataUrl) {
+      setError("Ajoutez une photo de plaque avant l'analyse.");
+      return;
+    }
+    setIsAnalyzing(true);
+    setError("");
+    try {
+      const result = await identificationService.analyzeEquipmentPlate({
+        companyId,
+        userId,
+        imageName,
+        imageDataUrl,
+        crop
+      });
+      setIdentification(result);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Analyse impossible.");
+    } finally {
+      setIsAnalyzing(false);
+    }
+  }
+
+  function rotateImage() {
+    setCrop((current) => ({ ...current, rotation: ((current.rotation + 90) % 360) as ImageCropSettings["rotation"] }));
+  }
+
+  return (
+    <section className="identify-page">
+      <div className="capture-actions">
+        <label className="photo-button">
+          <Camera size={22} /> Prendre photo
+          <input hidden type="file" accept="image/*" capture="environment" onChange={(event) => loadImage(event.target.files?.[0])} />
+        </label>
+        <label className="secondary">
+          <ImagePlus size={22} /> Galerie
+          <input hidden type="file" accept="image/*" onChange={(event) => loadImage(event.target.files?.[0])} />
+        </label>
+      </div>
+
+      <section className="plate-preview-card">
+        <div className="section-title">
+          <ScanLine size={20} />
+          <strong>Plaque signaletique</strong>
+        </div>
+        <div className="plate-preview">
+          {imageDataUrl ? (
+            <>
+              <img
+                src={imageDataUrl}
+                alt="Apercu plaque signaletique"
+                style={{
+                  transform: `translate(${crop.x}px, ${crop.y}px) rotate(${crop.rotation}deg) scale(${crop.zoom})`
+                }}
+              />
+              {identification?.detectedZones.map((zone) => (
+                <span
+                  className="detected-zone"
+                  key={zone.id}
+                  style={{
+                    left: `${zone.x}%`,
+                    top: `${zone.y}%`,
+                    width: `${zone.width}%`,
+                    height: `${zone.height}%`
+                  }}
+                  title={zone.label}
+                />
+              ))}
+            </>
+          ) : (
+            <div className="preview-empty">
+              <Camera size={28} />
+              <strong>Photo de plaque</strong>
+              <small>Cadrez la plaque au plus proche pour preparer l'analyse.</small>
+            </div>
+          )}
+        </div>
+        {imageName && <small className="muted">{imageName}</small>}
+      </section>
+
+      <section className="form-card compact">
+        <div className="section-title">
+          <Crop size={20} />
+          <strong>Recadrage</strong>
+        </div>
+        <label>
+          Zoom
+          <input type="range" min="1" max="2.4" step="0.1" value={crop.zoom} onChange={(event) => setCrop({ ...crop, zoom: Number(event.target.value) })} />
+        </label>
+        <label>
+          Horizontal
+          <input type="range" min="-120" max="120" value={crop.x} onChange={(event) => setCrop({ ...crop, x: Number(event.target.value) })} />
+        </label>
+        <label>
+          Vertical
+          <input type="range" min="-120" max="120" value={crop.y} onChange={(event) => setCrop({ ...crop, y: Number(event.target.value) })} />
+        </label>
+        <div className="capture-actions">
+          <button className="secondary" onClick={rotateImage} type="button">
+            <RotateCw size={20} /> Pivoter
+          </button>
+          <button className="primary" onClick={analyzeImage} disabled={isAnalyzing || !imageDataUrl} type="button">
+            <ScanLine size={20} /> {isAnalyzing ? "Analyse..." : "Analyser"}
+          </button>
+        </div>
+        {error && <p className="auth-error">{error}</p>}
+      </section>
+
+      {identification && <EquipmentIdentificationResult identification={identification} />}
+    </section>
+  );
+}
+
+function EquipmentIdentificationResult({ identification }: { identification: EquipmentIdentification }) {
   return (
     <section className="stack">
-      <form className="form-card compact" onSubmit={onSubmit}>
-        <input name="title" placeholder="Titre du document" required />
-        <input name="brand" placeholder="Marque" required />
-        <input name="range" placeholder="Gamme" />
-        <input name="model" placeholder="Modele compatible" />
-        <input name="version" placeholder="Version" />
-        <input name="source" placeholder="Source" />
-        <input name="fileName" placeholder="Nom du fichier PDF/image" />
-        <button className="primary">
-          <Plus size={20} /> Ajouter document
+      <article className="identification-card">
+        <div className="result-head">
+          <div>
+            <p className="eyebrow">Identification simulee</p>
+            <h2>{[identification.manufacturer, identification.model].filter(Boolean).join(" ")}</h2>
+          </div>
+          <span className="confidence-badge">{Math.round(identification.confidence * 100)}%</span>
+        </div>
+        <div className="detail-grid">
+          <Detail label="Constructeur" value={identification.manufacturer} />
+          <Detail label="Modele" value={identification.model} />
+          <Detail label="N serie" value={identification.serialNumber} />
+          <Detail label="Annee" value={identification.year ? String(identification.year) : undefined} />
+          <Detail label="Fluide" value={identification.refrigerant} />
+          <Detail label="Puissance" value={identification.power} />
+          <Detail label="Tension" value={identification.voltage} />
+          <Detail label="Intensite" value={identification.current} />
+          <Detail label="Frequence" value={identification.frequency} />
+        </div>
+        <p className="muted">{identification.remarks}</p>
+      </article>
+
+      <section className="form-card compact">
+        <div className="section-title">
+          <ShieldCheck size={20} />
+          <strong>Actions disponibles plus tard</strong>
+        </div>
+        <button className="secondary" disabled>
+          <BookOpen size={20} /> Rechercher la documentation
         </button>
-      </form>
-      <SimpleList
-        items={documents.map((item) => ({
-          id: item.id,
-          title: item.title,
-          subtitle: `${item.brand} ${item.compatibleModel || ""} - ${item.officialStatus.replace("_", " ")}`
-        }))}
-      />
+        <button className="secondary" disabled>
+          <Clock size={20} /> Voir les interventions precedentes
+        </button>
+        <button className="secondary" disabled>
+          <ClipboardList size={20} /> Creer une intervention
+        </button>
+        <button className="secondary" disabled>
+          <Plus size={20} /> Ajouter a la base Polaris
+        </button>
+        <button className="secondary" disabled>
+          <AlertTriangle size={20} /> Signaler une erreur d'identification
+        </button>
+      </section>
+    </section>
+  );
+}
+
+function TechnicalLibraryView({
+  data,
+  userId,
+  query,
+  productFamily,
+  documentType,
+  language,
+  onQueryChange,
+  onProductFamilyChange,
+  onDocumentTypeChange,
+  onLanguageChange,
+  onImportFolder,
+  onCreateDocument,
+  onToggleFavorite,
+  onOpenDocument
+}: {
+  data: AppData;
+  userId: string;
+  query: string;
+  productFamily: ProductFamily | "";
+  documentType: TechnicalDocumentType | "";
+  language: DocumentLanguage | "";
+  onQueryChange: (query: string) => void;
+  onProductFamilyChange: (family: ProductFamily | "") => void;
+  onDocumentTypeChange: (type: TechnicalDocumentType | "") => void;
+  onLanguageChange: (language: DocumentLanguage | "") => void;
+  onImportFolder: (files: File[]) => void;
+  onCreateDocument: (candidate: DocumentImportCandidate) => void;
+  onToggleFavorite: (documentId: string) => void;
+  onOpenDocument: (documentId: string) => void;
+}) {
+  const documents = searchTechnicalDocuments(data.documents, query, { productFamily, documentType, language });
+  const favorites = new Set(data.documentFavorites.filter((item) => item.userId === userId).map((item) => item.documentId));
+  const recentIds = data.documentRecentViews.filter((item) => item.userId === userId).map((item) => item.documentId);
+  const recentDocuments = recentIds
+    .map((id) => data.documents.find((document) => document.id === id))
+    .filter((document): document is TechnicalDocument => Boolean(document))
+    .slice(0, 4);
+  const pendingCandidates = data.documentImportCandidates.filter((candidate) => candidate.status === "propose").slice(0, 20);
+  const importedFileNames = new Set(data.documents.map((document) => document.fileName).filter(Boolean));
+  const equipmentMatches = data.equipment
+    .map((equipment) => ({
+      equipment,
+      documents: findDocumentsForEquipment(data.documents, equipment)
+    }))
+    .filter((item) => item.documents.length > 0)
+    .slice(0, 4);
+
+  return (
+    <section className="library-page">
+      <div className="search-box">
+        <Search size={20} />
+        <input value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="Marque, modele, reference, mot-cle..." />
+      </div>
+
+      <div className="filter-row">
+        <select value={productFamily} onChange={(event) => onProductFamilyChange(event.target.value as ProductFamily | "")}>
+          <option value="">Famille</option>
+          {productFamilyOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <select value={documentType} onChange={(event) => onDocumentTypeChange(event.target.value as TechnicalDocumentType | "")}>
+          <option value="">Categorie</option>
+          {documentTypeOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <select value={language} onChange={(event) => onLanguageChange(event.target.value as DocumentLanguage | "")}>
+          <option value="">Langue</option>
+          {languageOptions.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="stat-grid">
+        <MiniStat icon={<FileArchive />} label="Documents" value={String(data.documents.length)} />
+        <MiniStat icon={<Star />} label="Favoris" value={String(favorites.size)} />
+        <MiniStat icon={<Clock />} label="Recents" value={String(recentDocuments.length)} />
+        <MiniStat icon={<Upload />} label="A classer" value={String(pendingCandidates.length)} />
+      </div>
+
+      <section className="form-card compact">
+        <div className="section-title">
+          <FolderOpen size={20} />
+          <strong>Import de dossier</strong>
+        </div>
+        <label className="import-zone">
+          <Upload size={22} />
+          Selectionner un dossier de PDF et images
+          <input
+            hidden
+            type="file"
+            multiple
+            accept=".pdf,image/*"
+            ref={(input) => {
+              input?.setAttribute("webkitdirectory", "");
+              input?.setAttribute("directory", "");
+            }}
+            onChange={(event) => onImportFolder(Array.from(event.target.files || []))}
+          />
+        </label>
+        {pendingCandidates.length > 0 && (
+          <div className="candidate-list">
+            {pendingCandidates.map((candidate) => {
+              const alreadyImported = importedFileNames.has(candidate.fileName);
+              return (
+                <article className="candidate-card" key={candidate.id}>
+                  <div>
+                    <strong>{candidate.proposedTitle}</strong>
+                    <small>
+                      {[candidate.proposedBrand, candidate.proposedModel, candidate.proposedYear].filter(Boolean).join(" - ") || candidate.fileName}
+                    </small>
+                  </div>
+                  <span className="status-pill">{Math.round(candidate.confidence * 100)}%</span>
+                  <button className="secondary" disabled={alreadyImported} onClick={() => onCreateDocument(candidate)}>
+                    <CheckCircle2 size={18} /> {alreadyImported ? "Ajoute" : "Valider"}
+                  </button>
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      <section className="stack">
+        <div className="section-title">
+          <BookOpen size={20} />
+          <strong>Bibliotheque</strong>
+        </div>
+        {documents.length === 0 ? (
+          <article className="empty-state">
+            <FileText size={24} />
+            <strong>Aucun document classe</strong>
+            <small>La structure est prete pour les imports, les favoris, les recherches rapides et l'indexation future.</small>
+          </article>
+        ) : (
+          documents.map((document) => (
+            <article className="document-card" key={document.id}>
+              <button className="icon-action" onClick={() => onToggleFavorite(document.id)} aria-label="Favori">
+                <Star size={20} fill={favorites.has(document.id) ? "currentColor" : "none"} />
+              </button>
+              <button className="document-main" onClick={() => onOpenDocument(document.id)}>
+                <strong>{document.title}</strong>
+                <small>
+                  {[document.brand, document.model || document.compatibleModel, document.manufacturerReference].filter(Boolean).join(" - ")}
+                </small>
+                <span className="tag-row">
+                  <span>{documentTypeLabel(document.documentType)}</span>
+                  {document.productFamily && <span>{productFamilyLabel(document.productFamily)}</span>}
+                  <span>{document.language}</span>
+                  <span>{document.indexStatus === "pret_rag" ? "RAG pret" : "RAG prepare"}</span>
+                </span>
+              </button>
+            </article>
+          ))
+        )}
+      </section>
+
+      {recentDocuments.length > 0 && (
+        <section className="stack">
+          <div className="section-title">
+            <Clock size={20} />
+            <strong>Recemment consultes</strong>
+          </div>
+          {recentDocuments.map((document) => (
+            <article className="list-card passive" key={document.id}>
+              <strong>{document.title}</strong>
+              <small>{[document.brand, document.model || document.compatibleModel].filter(Boolean).join(" - ")}</small>
+            </article>
+          ))}
+        </section>
+      )}
+
+      <section className="form-card compact">
+        <div className="section-title">
+          <Link2 size={20} />
+          <strong>Liaisons equipements</strong>
+        </div>
+        {equipmentMatches.length === 0 ? (
+          <small className="muted">Les liaisons automatiques apparaitront des qu'un document correspond a une marque et un modele enregistres.</small>
+        ) : (
+          equipmentMatches.map(({ equipment, documents }) => (
+            <article className="link-row" key={equipment.id}>
+              <strong>{equipment.label}</strong>
+              <small>
+                {equipment.brand} {equipment.model} - {documents.length} document(s)
+              </small>
+            </article>
+          ))
+        )}
+      </section>
+
+      <section className="library-future">
+        <div>
+          <Tags size={20} />
+          <span>Index IA prepare</span>
+        </div>
+        <div>
+          <Bot size={20} />
+          <span>Robot constructeur en attente de validation utilisateur</span>
+        </div>
+      </section>
     </section>
   );
 }
@@ -660,6 +1111,26 @@ function SimpleList({ items }: { items: Array<{ id: string; title: string; subti
       ))}
     </section>
   );
+}
+
+function MiniStat({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+  return (
+    <article className="mini-stat">
+      {icon}
+      <div>
+        <strong>{value}</strong>
+        <small>{label}</small>
+      </div>
+    </article>
+  );
+}
+
+function documentTypeLabel(value: TechnicalDocumentType): string {
+  return documentTypeOptions.find((option) => option.value === value)?.label || value;
+}
+
+function productFamilyLabel(value: ProductFamily): string {
+  return productFamilyOptions.find((option) => option.value === value)?.label || value;
 }
 
 function InfoCard({ title, subtitle, icon }: { title: string; subtitle: string; icon: React.ReactNode }) {
@@ -725,6 +1196,7 @@ function titleForView(view: View): string {
     customers: "Clients",
     sites: "Sites",
     equipment: "Equipements",
+    identifyEquipment: "Identifier un equipement",
     documents: "Documentation",
     team: "Equipe",
     profile: "Profil",
