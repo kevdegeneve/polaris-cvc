@@ -1,4 +1,14 @@
-import { AppData, ContentStatus, InterventionDraft, TechnicalDocument } from "../domain/types";
+import {
+  AppData,
+  AppUser,
+  ContentStatus,
+  Diagnostic,
+  DiagnosticMessage,
+  DiagnosticPhoto,
+  DocumentImportCandidate,
+  InterventionDraft,
+  TechnicalDocument
+} from "../domain/types";
 import { FirestoreRepository } from "./firestoreRepository";
 import { createFirebaseServices } from "./firebaseClient";
 import { LocalRepository } from "./localRepository";
@@ -13,6 +23,11 @@ export interface AppRepository {
     data: AppData,
     document: Omit<TechnicalDocument, "id" | "companyId" | "createdAt" | "updatedAt">
   ): Promise<AppData>;
+  importDocumentCandidates(data: AppData, candidates: DocumentImportCandidate[], userId: string): Promise<AppData>;
+  toggleDocumentFavorite(data: AppData, documentId: string, userId: string): Promise<AppData>;
+  recordDocumentView(data: AppData, documentId: string, userId: string): Promise<AppData>;
+  updateUserLanguage(data: AppData, userId: string, language: AppUser["preferredLanguage"], label: string): Promise<AppData>;
+  saveDiagnostic(data: AppData, diagnostic: Diagnostic, photos: DiagnosticPhoto[], messages: DiagnosticMessage[]): Promise<AppData>;
 }
 
 export function createAppRepository(userId?: string): AppRepository {

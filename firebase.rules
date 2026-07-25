@@ -9,20 +9,42 @@ service cloud.firestore {
       return /databases/$(database)/documents/users/$(request.auth.uid);
     }
 
+    function authorizationPath(emailNormalized) {
+      return /databases/$(database)/documents/authorizedUsers/$(emailNormalized);
+    }
+
+    function hasAuthorization(emailNormalized) {
+      return signedIn()
+        && emailNormalized is string
+        && exists(authorizationPath(emailNormalized))
+        && get(authorizationPath(emailNormalized)).data.isActive == true;
+    }
+
+    function authorization(emailNormalized) {
+      return get(authorizationPath(emailNormalized)).data;
+    }
+
     function hasUserProfile() {
-      return signedIn() && exists(userPath());
+      return signedIn()
+        && exists(userPath())
+        && get(userPath()).data.isActive == true
+        && hasAuthorization(get(userPath()).data.emailNormalized);
     }
 
     function currentUser() {
       return get(userPath()).data;
     }
 
-    function sameCompany(companyId) {
-      return hasUserProfile() && currentUser().companyId == companyId;
+    function isAdmin() {
+      return hasUserProfile()
+        && (currentUser().role == "admin" || currentUser().role == "administrateur")
+        && authorization(currentUser().emailNormalized).role in ["admin", "administrateur"];
     }
 
-    function isAdmin() {
-      return hasUserProfile() && currentUser().role == "administrateur";
+    function sameCompany(companyId) {
+      return hasUserProfile()
+        && currentUser().companyId == companyId
+        && authorization(currentUser().emailNormalized).companyId == companyId;
     }
 
     function companyIdIsUnchanged() {
@@ -33,6 +55,33 @@ service cloud.firestore {
       return request.resource.data.companyId is string;
     }
 
+    function validOwnProfileCreate(userId) {
+      return signedIn()
+        && request.auth.uid == userId
+        && hasAuthorization(request.resource.data.emailNormalized)
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.companyId == authorization(request.resource.data.emailNormalized).companyId
+        && request.resource.data.role == authorization(request.resource.data.emailNormalized).role
+        && request.resource.data.isActive == authorization(request.resource.data.emailNormalized).isActive
+        && request.resource.data.createdAt is string
+        && request.resource.data.lastLoginAt is string;
+    }
+
+    function isOwnAuthorizationDocument(emailId) {
+      return signedIn()
+        && request.auth.token.email is string
+        && resource.data.email is string
+        && resource.data.emailNormalized == emailId
+        && resource.data.email == request.auth.token.email;
+    }
+
+    match /authorizedUsers/{emailId} {
+      allow get: if isOwnAuthorizationDocument(emailId) || isAdmin();
+      allow list: if isAdmin();
+      allow create, update, delete: if isAdmin();
+    }
+
     match /companies/{companyId} {
       allow read: if sameCompany(companyId);
       allow create: if false;
@@ -41,13 +90,88 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      allow read: if sameCompany(resource.data.companyId);
-      allow create: if isAdmin() && hasRequiredCompanyId() && sameCompany(request.resource.data.companyId);
+      allow read: if signedIn() && request.auth.uid == userId && hasUserProfile();
+      allow create: if validOwnProfileCreate(userId);
+      allow update: if signedIn()
+        && request.auth.uid == userId
+        && hasUserProfile()
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.emailNormalized == resource.data.emailNormalized
+        && request.resource.data.companyId == authorization(resource.data.emailNormalized).companyId
+        && request.resource.data.role == authorization(resource.data.emailNormalized).role
+        && request.resource.data.isActive == authorization(resource.data.emailNormalized).isActive
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          "email",
+          "displayName",
+          "photoURL",
+          "companyId",
+          "role",
+          "isActive",
+          "lastLoginAt",
+          "preferredLanguage",
+          "preferredLanguageLabel",
+          "languageConfiguredAt",
+          "updatedAt"
+        ]);
+      allow delete: if false;
+    }
+
+    match /diagnostics/{diagnosticId} {
+      allow read: if sameCompany(resource.data.companyId)
+        && (resource.data.technicianId == request.auth.uid || isAdmin());
+      allow create: if hasRequiredCompanyId()
+        && sameCompany(request.resource.data.companyId)
+        && request.resource.data.technicianId == request.auth.uid
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.updatedBy == request.auth.uid
+        && request.resource.data.status in [
+          "draft",
+          "uploading_photos",
+          "ready_for_analysis",
+          "analyzing",
+          "awaiting_technician_input",
+          "completed",
+          "archived",
+          "analysis_failed"
+        ];
       allow update: if sameCompany(resource.data.companyId)
         && companyIdIsUnchanged()
-        && (request.auth.uid == userId || isAdmin())
-        && (!request.resource.data.diff(resource.data).changedKeys().hasAny(["role"]) || isAdmin());
-      allow delete: if isAdmin() && sameCompany(resource.data.companyId);
+        && request.resource.data.technicianId == resource.data.technicianId
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.updatedBy == request.auth.uid
+        && (resource.data.technicianId == request.auth.uid || isAdmin());
+      allow delete: if false;
+    }
+
+    match /diagnosticPhotos/{photoId} {
+      allow read: if sameCompany(resource.data.companyId)
+        && (resource.data.uploadedBy == request.auth.uid || isAdmin());
+      allow create: if hasRequiredCompanyId()
+        && sameCompany(request.resource.data.companyId)
+        && request.resource.data.uploadedBy == request.auth.uid;
+      allow update: if sameCompany(resource.data.companyId)
+        && companyIdIsUnchanged()
+        && request.resource.data.uploadedBy == resource.data.uploadedBy
+        && (resource.data.uploadedBy == request.auth.uid || isAdmin());
+      allow delete: if false;
+    }
+
+    match /diagnosticMessages/{messageId} {
+      allow read: if sameCompany(resource.data.companyId)
+        && (resource.data.createdBy == request.auth.uid || isAdmin());
+      allow create: if hasRequiredCompanyId()
+        && sameCompany(request.resource.data.companyId)
+        && request.resource.data.createdBy == request.auth.uid;
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    match /diagnosticDocumentLinks/{linkId} {
+      allow read: if sameCompany(resource.data.companyId);
+      allow create: if hasRequiredCompanyId() && sameCompany(request.resource.data.companyId);
+      allow update: if sameCompany(resource.data.companyId) && companyIdIsUnchanged();
+      allow delete: if false;
     }
 
     match /interventions/{interventionId} {
@@ -58,6 +182,61 @@ service cloud.firestore {
       allow update: if sameCompany(resource.data.companyId)
         && companyIdIsUnchanged()
         && request.resource.data.authorId == resource.data.authorId;
+      allow delete: if isAdmin() && sameCompany(resource.data.companyId);
+    }
+
+    match /technicalDocuments/{documentId} {
+      allow read: if sameCompany(resource.data.companyId);
+      allow create: if hasRequiredCompanyId() && sameCompany(request.resource.data.companyId);
+      allow update: if sameCompany(resource.data.companyId) && companyIdIsUnchanged();
+      allow delete: if isAdmin() && sameCompany(resource.data.companyId);
+    }
+
+    match /documentLinks/{linkId} {
+      allow read: if sameCompany(resource.data.companyId);
+      allow create: if hasRequiredCompanyId() && sameCompany(request.resource.data.companyId);
+      allow update: if sameCompany(resource.data.companyId) && companyIdIsUnchanged();
+      allow delete: if isAdmin() && sameCompany(resource.data.companyId);
+    }
+
+    match /documentFavorites/{favoriteId} {
+      allow read: if sameCompany(resource.data.companyId);
+      allow create: if hasRequiredCompanyId()
+        && sameCompany(request.resource.data.companyId)
+        && request.resource.data.userId == request.auth.uid;
+      allow update: if false;
+      allow delete: if sameCompany(resource.data.companyId)
+        && (resource.data.userId == request.auth.uid || isAdmin());
+    }
+
+    match /documentRecentViews/{recentViewId} {
+      allow read: if sameCompany(resource.data.companyId);
+      allow create: if hasRequiredCompanyId()
+        && sameCompany(request.resource.data.companyId)
+        && request.resource.data.userId == request.auth.uid;
+      allow update: if sameCompany(resource.data.companyId)
+        && companyIdIsUnchanged()
+        && request.resource.data.userId == resource.data.userId
+        && resource.data.userId == request.auth.uid;
+      allow delete: if sameCompany(resource.data.companyId)
+        && (resource.data.userId == request.auth.uid || isAdmin());
+    }
+
+    match /documentImportBatches/{batchId} {
+      allow read: if sameCompany(resource.data.companyId);
+      allow create: if hasRequiredCompanyId()
+        && sameCompany(request.resource.data.companyId)
+        && request.resource.data.importedByUserId == request.auth.uid;
+      allow update: if sameCompany(resource.data.companyId)
+        && companyIdIsUnchanged()
+        && request.resource.data.importedByUserId == resource.data.importedByUserId;
+      allow delete: if isAdmin() && sameCompany(resource.data.companyId);
+    }
+
+    match /documentImportCandidates/{candidateId} {
+      allow read: if sameCompany(resource.data.companyId);
+      allow create: if hasRequiredCompanyId() && sameCompany(request.resource.data.companyId);
+      allow update: if sameCompany(resource.data.companyId) && companyIdIsUnchanged();
       allow delete: if isAdmin() && sameCompany(resource.data.companyId);
     }
 

@@ -19,13 +19,17 @@ import {
   AppUser,
   Company,
   ContentStatus,
+  Diagnostic,
+  DiagnosticMessage,
+  DiagnosticPhoto,
   DocumentImportCandidate,
   Intervention,
   InterventionDraft,
   TechnicalDocument
 } from "../domain/types";
 import type { AppRepository } from "./repository";
-import { createSeedData, LocalRepository } from "./localRepository";
+import { assertValidPreferredLanguage, removeUndefinedFields } from "./firestoreData";
+import { createEmptyData, LocalRepository } from "./localRepository";
 
 function now(): string {
   return new Date().toISOString();
@@ -56,30 +60,40 @@ export class FirestoreRepository implements AppRepository {
 
     const user = fromFirestore<AppUser>(userSnap.id, userSnap.data());
     const companySnap = await getDoc(doc(this.db, "companies", user.companyId));
-    if (!companySnap.exists()) {
-      throw new Error("Entreprise introuvable dans Firestore.");
-    }
-
-    const company = fromFirestore<Company>(companySnap.id, companySnap.data());
+    const emptyData = createEmptyData(user.companyId, user.companyId);
+    const company = companySnap.exists()
+      ? fromFirestore<Company>(companySnap.id, companySnap.data())
+      : {
+          ...emptyData.company,
+          id: user.companyId,
+          name: user.companyId,
+          updatedAt: now()
+        };
     const users = await this.loadUsers(user.companyId);
     const interventions = await this.loadInterventions(user.companyId);
-    const seed = createSeedData();
+    const diagnostics = await this.loadDiagnostics(user.companyId);
+    const diagnosticPhotos = await this.loadDiagnosticPhotos(user.companyId);
+    const diagnosticMessages = await this.loadDiagnosticMessages(user.companyId);
     const localData = this.local.loadSync();
 
     return {
-      ...seed,
+      ...emptyData,
       company,
       users,
       interventions,
       media: localData.media.filter((item) => item.companyId === user.companyId),
       equipmentIdentifications: localData.equipmentIdentifications.filter((item) => item.companyId === user.companyId),
+      diagnostics,
+      diagnosticPhotos,
+      diagnosticMessages,
+      diagnosticDocumentLinks: localData.diagnosticDocumentLinks.filter((item) => item.companyId === user.companyId),
       documents: localData.documents.filter((item) => item.companyId === user.companyId),
       documentLinks: localData.documentLinks.filter((item) => item.companyId === user.companyId),
       documentFavorites: localData.documentFavorites.filter((item) => item.companyId === user.companyId),
       documentRecentViews: localData.documentRecentViews.filter((item) => item.companyId === user.companyId),
       documentImportBatches: localData.documentImportBatches.filter((item) => item.companyId === user.companyId),
       documentImportCandidates: localData.documentImportCandidates.filter((item) => item.companyId === user.companyId),
-      aiAnalyses: seed.aiAnalyses.map((item) => ({ ...item, companyId: user.companyId }))
+      aiAnalyses: []
     };
   }
 
@@ -89,7 +103,7 @@ export class FirestoreRepository implements AppRepository {
     assertCompanyAccess(author.companyId, { companyId: data.company.id });
 
     const timestamp = now();
-    const ref = await addDoc(collection(this.db, "interventions"), {
+    const ref = await addDoc(collection(this.db, "interventions"), removeUndefinedFields({
       ...draft,
       companyId: data.company.id,
       number: `INT-${new Date().getFullYear()}-${String(data.interventions.length + 1).padStart(4, "0")}`,
@@ -101,7 +115,7 @@ export class FirestoreRepository implements AppRepository {
       updatedAt: timestamp,
       createdAtServer: serverTimestamp(),
       updatedAtServer: serverTimestamp()
-    });
+    }));
 
     const intervention: Intervention = {
       ...draft,
@@ -128,12 +142,12 @@ export class FirestoreRepository implements AppRepository {
     assertCompanyAccess(data.company.id, intervention);
 
     const timestamp = now();
-    await updateDoc(doc(this.db, "interventions", interventionId), {
+    await updateDoc(doc(this.db, "interventions", interventionId), removeUndefinedFields({
       contentStatus,
       completedAt: contentStatus === "termine" ? timestamp : intervention.completedAt,
       updatedAt: timestamp,
       updatedAtServer: serverTimestamp()
-    });
+    }));
 
     return {
       ...data,
@@ -173,10 +187,37 @@ export class FirestoreRepository implements AppRepository {
     return this.local.recordDocumentView(data, documentId, userId);
   }
 
+  async updateUserLanguage(data: AppData, userId: string, language: AppUser["preferredLanguage"], label: string): Promise<AppData> {
+    assertValidPreferredLanguage(language);
+    const timestamp = now();
+    await updateDoc(doc(this.db, "users", userId), removeUndefinedFields({
+      preferredLanguage: language,
+      preferredLanguageLabel: label,
+      languageConfiguredAt: timestamp,
+      updatedAt: timestamp
+    }));
+    return this.local.updateUserLanguage(data, userId, language, label);
+  }
+
+  async saveDiagnostic(data: AppData, diagnostic: Diagnostic, photos: DiagnosticPhoto[], messages: DiagnosticMessage[]): Promise<AppData> {
+    await setDoc(doc(this.db, "diagnostics", diagnostic.id), removeUndefinedFields(diagnostic), { merge: true });
+    await Promise.all([
+      ...photos.map((photo) => setDoc(doc(this.db, "diagnosticPhotos", photo.id), removeUndefinedFields(photo), { merge: true })),
+      ...messages.map((message) => setDoc(doc(this.db, "diagnosticMessages", message.id), removeUndefinedFields(message), { merge: true }))
+    ]);
+
+    return {
+      ...data,
+      diagnostics: [diagnostic, ...data.diagnostics.filter((item) => item.id !== diagnostic.id)],
+      diagnosticPhotos: [...photos, ...data.diagnosticPhotos.filter((item) => item.diagnosticId !== diagnostic.id)],
+      diagnosticMessages: [...messages, ...data.diagnosticMessages.filter((item) => item.diagnosticId !== diagnostic.id)]
+    };
+  }
+
   async ensureUserProfile(user: AppUser, company: Company): Promise<void> {
     assertCompanyAccess(user.companyId, { companyId: company.id });
-    await setDoc(doc(this.db, "companies", company.id), company, { merge: true });
-    await setDoc(doc(this.db, "users", user.id), user, { merge: true });
+    await setDoc(doc(this.db, "companies", company.id), removeUndefinedFields(company), { merge: true });
+    await setDoc(doc(this.db, "users", user.id), removeUndefinedFields(user), { merge: true });
   }
 
   private async loadUsers(companyId: string): Promise<AppUser[]> {
@@ -189,5 +230,22 @@ export class FirestoreRepository implements AppRepository {
       query(collection(this.db, "interventions"), where("companyId", "==", companyId), orderBy("createdAt", "desc"), limit(100))
     );
     return snapshot.docs.map((item) => fromFirestore<Intervention>(item.id, item.data()));
+  }
+
+  private async loadDiagnostics(companyId: string): Promise<Diagnostic[]> {
+    const snapshot = await getDocs(
+      query(collection(this.db, "diagnostics"), where("companyId", "==", companyId), orderBy("createdAt", "desc"), limit(100))
+    );
+    return snapshot.docs.map((item) => fromFirestore<Diagnostic>(item.id, item.data()));
+  }
+
+  private async loadDiagnosticPhotos(companyId: string): Promise<DiagnosticPhoto[]> {
+    const snapshot = await getDocs(query(collection(this.db, "diagnosticPhotos"), where("companyId", "==", companyId), limit(300)));
+    return snapshot.docs.map((item) => fromFirestore<DiagnosticPhoto>(item.id, item.data()));
+  }
+
+  private async loadDiagnosticMessages(companyId: string): Promise<DiagnosticMessage[]> {
+    const snapshot = await getDocs(query(collection(this.db, "diagnosticMessages"), where("companyId", "==", companyId), limit(300)));
+    return snapshot.docs.map((item) => fromFirestore<DiagnosticMessage>(item.id, item.data()));
   }
 }

@@ -1,4 +1,4 @@
-export type UserRole = "technicien" | "referent_technique" | "administrateur";
+export type UserRole = "technicien" | "technician" | "referent_technique" | "administrateur" | "admin";
 export type ContentStatus = "brouillon" | "termine" | "valide" | "a_verifier";
 export type InterventionResult = "resolu" | "provisoire" | "non_resolu" | "a_surveiller";
 export type SyncState = "synchronise" | "en_attente" | "hors_ligne";
@@ -17,6 +17,33 @@ export type DocumentImportStatus = "propose" | "valide" | "ignore" | "erreur";
 export type DocumentIndexStatus = "non_indexe" | "metadonnees" | "texte_extrait" | "pret_rag";
 export type DocumentSourceType = "manuel" | "import_dossier" | "constructeur_officiel" | "robot_constructeur";
 export type EquipmentIdentificationStatus = "pret" | "analyse" | "termine" | "erreur";
+export type UserPreferredLanguage = "fr" | "en" | "de" | "it" | "es";
+export type DiagnosticStatus =
+  | "draft"
+  | "uploading_photos"
+  | "ready_for_analysis"
+  | "analyzing"
+  | "awaiting_technician_input"
+  | "completed"
+  | "archived"
+  | "analysis_failed";
+export type DiagnosticPhotoCategory =
+  | "plaque_signaletique"
+  | "code_erreur"
+  | "equipement"
+  | "carte_electronique"
+  | "mesure"
+  | "cablage"
+  | "composant"
+  | "autre";
+export type DiagnosticMessageRole = "system" | "assistant" | "technician" | "source" | "observation" | "measurement";
+export type TechnicalDocumentStatus = "active" | "deprecated" | "superseded" | "hidden";
+export type DocumentTranslationStatus =
+  | "original_available"
+  | "translation_pending"
+  | "translated"
+  | "translation_failed"
+  | "official_translation_available";
 
 export interface CompanyScoped {
   id: string;
@@ -32,10 +59,29 @@ export interface Company extends Omit<CompanyScoped, "companyId"> {
 }
 
 export interface AppUser extends CompanyScoped {
+  uid?: string;
+  emailNormalized?: string;
   displayName: string;
   email: string;
   role: UserRole;
   phone?: string;
+  photoURL?: string;
+  lastLoginAt?: string;
+  isActive?: boolean;
+  preferredLanguage?: UserPreferredLanguage;
+  preferredLanguageLabel?: string;
+  languageConfiguredAt?: string;
+}
+
+export interface AuthorizedUser {
+  email: string;
+  emailNormalized: string;
+  companyId: string;
+  role: UserRole;
+  isActive: boolean;
+  invitedAt?: string;
+  invitedBy?: string;
+  updatedAt?: string;
 }
 
 export interface Customer extends CompanyScoped {
@@ -98,7 +144,7 @@ export interface EquipmentIdentification extends CompanyScoped {
   confidence: number;
   detectedZones: DetectedImageZone[];
   status: EquipmentIdentificationStatus;
-  provider: "mock" | "vision_ocr";
+  provider: "not_connected" | "vision_ocr";
   createdByUserId: string;
 }
 
@@ -172,6 +218,204 @@ export interface TechnicalDocument extends CompanyScoped {
   indexStatus: DocumentIndexStatus;
   ragChunkCount?: number;
   lastViewedAt?: string;
+  manufacturer?: string;
+  modelReferences?: string[];
+  errorCodes?: string[];
+  originalLanguage?: string;
+  localizedLanguage?: string;
+  originalStoragePath?: string;
+  canonicalUrl?: string;
+  fileHash?: string;
+  documentReference?: string;
+  documentVersion?: string;
+  publicationDate?: string;
+  isOfficialDocument?: boolean;
+  isOfficialTranslation?: boolean;
+  isMachineTranslated?: boolean;
+  originalDocumentId?: string;
+  translationStatus?: DocumentTranslationStatus;
+  summary?: string;
+  extractedKeywords?: string[];
+  status?: TechnicalDocumentStatus;
+  usageCount?: number;
+  diagnosticIds?: string[];
+  firstRetrievedBy?: string;
+  firstRetrievedAt?: string;
+  lastUsedAt?: string;
+}
+
+export interface SourceReference {
+  documentId?: string;
+  title: string;
+  manufacturer?: string;
+  originalLanguage?: string;
+  displayedLanguage?: string;
+  brand?: string;
+  model?: string;
+  errorCode?: string;
+  documentType?: TechnicalDocumentType;
+  sourceUrl?: string;
+  retrievedAt?: string;
+  lastUsedAt?: string;
+  hash?: string;
+  pagesUsed?: string[];
+  sectionsUsed?: string[];
+  excerptsUsed?: string[];
+  verificationStatus?: "a_verifier" | "verifie" | "rejete";
+}
+
+export interface DiagnosticMeasurement {
+  label: string;
+  value: string;
+  unit?: string;
+}
+
+export interface DiagnosticCheck {
+  title: string;
+  instruction: string;
+  reason: string;
+  expectedResult: string;
+  safetyLevel: "low" | "medium" | "high";
+  order: number;
+}
+
+export interface ExpectedMeasurement {
+  measurement: string;
+  location: string;
+  expectedValue: string;
+  unit?: string;
+  tolerance?: string;
+  conditions?: string;
+}
+
+export interface DiagnosticAIResult {
+  detectedBrand: string | null;
+  detectedModel: string | null;
+  detectedSerialNumber: string | null;
+  detectedEquipmentType: string | null;
+  detectedErrorCode: string | null;
+  plateExtractedText: string[];
+  faultImageExtractedText: string[];
+  faultDescription: string | null;
+  probableCauses: string[];
+  recommendedChecks: DiagnosticCheck[];
+  expectedMeasurements: ExpectedMeasurement[];
+  safetyWarnings: string[];
+  suggestedSolutions: string[];
+  missingInformation: string[];
+  confidenceLevel: number;
+  analysisLanguage: UserPreferredLanguage;
+  sourceReferences: SourceReference[];
+  analyzedAt: string;
+  modelUsed: string;
+  promptVersion: string;
+}
+
+export interface Diagnostic extends CompanyScoped {
+  title: string;
+  detectedBrand?: string;
+  detectedBrandNormalized?: string;
+  detectedModel?: string;
+  detectedSerialNumber?: string;
+  detectedEquipmentType?: string;
+  detectedErrorCode?: string;
+  detectedErrorCodeNormalized?: string;
+  shortFaultDescription?: string;
+  status: DiagnosticStatus;
+  technicianId: string;
+  technicianName: string;
+  preferredLanguage: UserPreferredLanguage;
+  mainPhotoId?: string;
+  photoIds: string[];
+  messageCount: number;
+  documentIds: string[];
+  sourceReferences: SourceReference[];
+  analysisSummary?: string;
+  analysisResult?: DiagnosticAIResult;
+  finalDiagnosis?: string;
+  probableCauses: string[];
+  performedChecks: string[];
+  recommendedChecks?: DiagnosticCheck[];
+  expectedMeasurements?: ExpectedMeasurement[];
+  measurements: DiagnosticMeasurement[];
+  proposedSolutions: string[];
+  safetyWarnings: string[];
+  confidenceLevel?: number;
+  analysisStartedAt?: string;
+  analysisRequestedBy?: string;
+  analysisCompletedAt?: string;
+  analysisAttemptCount?: number;
+  analyzedPhotoSignature?: string;
+  promptVersion?: string;
+  modelUsed?: string;
+  analysisError?: string;
+  completedAt?: string;
+  archivedAt?: string;
+  createdBy: string;
+  updatedBy: string;
+}
+
+export interface DiagnosticPhoto extends CompanyScoped {
+  diagnosticId: string;
+  storagePath: string;
+  downloadUrl?: string;
+  originalFileName: string;
+  mimeType: string;
+  size: number;
+  category: DiagnosticPhotoCategory;
+  categoryDetectedByAI: boolean;
+  uploadedBy: string;
+  uploadedAt: string;
+  analysisStatus: "pending" | "not_connected" | "analyzed" | "failed";
+  extractedText?: string;
+  extractedMetadata?: Record<string, string>;
+}
+
+export interface DiagnosticMessage extends CompanyScoped {
+  diagnosticId: string;
+  role: DiagnosticMessageRole;
+  content: string;
+  language: UserPreferredLanguage;
+  photoIds: string[];
+  documentIds: string[];
+  sourceReferences: SourceReference[];
+  createdBy: string;
+}
+
+export interface DiagnosticDocumentLink extends CompanyScoped {
+  diagnosticId: string;
+  documentId: string;
+  languageUsed: UserPreferredLanguage;
+  pagesUsed: string[];
+  sectionsUsed: string[];
+  excerptsUsed: string[];
+  reasonUsed: string;
+  usedAt: string;
+  usedByAI: boolean;
+  responseMessageId?: string;
+}
+
+export interface DiagnosticAnalysis {
+  result: DiagnosticAIResult;
+  detectedBrand?: string | null;
+  detectedModel?: string | null;
+  detectedErrorCode?: string | null;
+  shortFaultDescription?: string | null;
+  sourceReferences: SourceReference[];
+  confidenceLevel?: number;
+}
+
+export interface AIAnalysisRequest {
+  diagnosticId: string;
+  preferredLanguage?: UserPreferredLanguage;
+  photoIds?: string[];
+  message?: string;
+}
+
+export interface AIAnalysisResponse {
+  status: "not_connected" | "completed" | "failed";
+  message: string;
+  analysis?: DiagnosticAnalysis;
 }
 
 export interface DocumentLink extends CompanyScoped {
@@ -242,6 +486,10 @@ export interface AppData {
   sites: Site[];
   equipment: Equipment[];
   equipmentIdentifications: EquipmentIdentification[];
+  diagnostics: Diagnostic[];
+  diagnosticPhotos: DiagnosticPhoto[];
+  diagnosticMessages: DiagnosticMessage[];
+  diagnosticDocumentLinks: DiagnosticDocumentLink[];
   interventions: Intervention[];
   measurements: Measurement[];
   media: MediaItem[];

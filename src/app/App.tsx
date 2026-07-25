@@ -2,7 +2,6 @@ import type React from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
   BookOpen,
-  Bot,
   BriefcaseBusiness,
   Building2,
   Camera,
@@ -10,7 +9,6 @@ import {
   ClipboardList,
   Clock,
   Crop,
-  AlertTriangle,
   FileArchive,
   FileText,
   FolderOpen,
@@ -24,13 +22,13 @@ import {
   Search,
   ShieldCheck,
   Star,
-  Tags,
   Upload,
   Users,
   Wrench
 } from "lucide-react";
 import {
   AppData,
+  AppUser,
   DocumentImportCandidate,
   EquipmentIdentification,
   ImageCropSettings,
@@ -42,6 +40,9 @@ import {
   DocumentLanguage
 } from "../domain/types";
 import { makeSearchIndex, validateInterventionDraft } from "../domain/validation";
+import { AppShell, Dashboard, ModulePlaceholder, UserAvatar } from "./dashboard";
+import { ensureVisibleUsers, isAdminRole, type DashboardView } from "./dashboardModel";
+import { DiagnosticArchivesView, DiagnosticStartView, LanguageSelectionScreen } from "./diagnostics";
 import {
   buildDocumentSearchIndex,
   createImportCandidates,
@@ -51,15 +52,23 @@ import {
   productFamilyOptions,
   searchTechnicalDocuments
 } from "../services/documentLibraryService";
-import { getFirebaseAuthState, signIn, signOutCurrentSession, type AuthSession } from "../services/authService";
+import {
+  AuthAccessDeniedError,
+  ensureUserProfile,
+  getFirebaseAuthState,
+  signInWithGoogle,
+  signOutCurrentSession,
+  type AuthSession
+} from "../services/authService";
 import { createFirebaseServices } from "../services/firebaseClient";
 import { identificationService } from "../services/identificationService";
-import { createSeedData } from "../services/localRepository";
+import { createTranslator, hasConfiguredLanguage, getLanguageLabel, type TranslationKey } from "../services/languageService";
+import { createEmptyData } from "../services/localRepository";
 import { createAppRepository, type AppRepository } from "../services/repository";
 import { openPrintableReport } from "../services/reportService";
 
 type View =
-  | "home"
+  | DashboardView
   | "new"
   | "active"
   | "interventions"
@@ -67,11 +76,8 @@ type View =
   | "customers"
   | "sites"
   | "equipment"
-  | "identifyEquipment"
-  | "documents"
-  | "team"
   | "profile"
-  | "company";
+;
 
 const emptyDraft: InterventionDraft = {
   customerId: "",
@@ -94,13 +100,14 @@ const emptyDraft: InterventionDraft = {
 export function App() {
   const [session, setSession] = useState<AuthSession | null>(null);
   const [appRepository, setAppRepository] = useState<AppRepository>(() => createAppRepository());
-  const [authEmail, setAuthEmail] = useState("mila@polaris.local");
-  const [authPassword, setAuthPassword] = useState("demo-polaris");
   const [authError, setAuthError] = useState("");
+  const [accessDenied, setAccessDenied] = useState<{ email: string; reason: string } | null>(null);
   const [statusMessage, setStatusMessage] = useState("");
+  const [languageError, setLanguageError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isAuthReady, setIsAuthReady] = useState(false);
   const [view, setView] = useState<View>("home");
-  const [data, setData] = useState(() => createSeedData());
+  const [data, setData] = useState(() => createEmptyData());
   const [selectedInterventionId, setSelectedInterventionId] = useState(data.interventions[0]?.id ?? "");
   const [draft, setDraft] = useState<InterventionDraft>(emptyDraft);
   const [query, setQuery] = useState("");
@@ -108,13 +115,32 @@ export function App() {
   const [documentFamily, setDocumentFamily] = useState<ProductFamily | "">("");
   const [documentType, setDocumentType] = useState<TechnicalDocumentType | "">("");
   const [documentLanguage, setDocumentLanguage] = useState<DocumentLanguage | "">("");
+  const [diagnosticQuery, setDiagnosticQuery] = useState("");
   const [errors, setErrors] = useState<string[]>([]);
   const firebaseReady = useMemo(() => Boolean(createFirebaseServices()), []);
 
   const isAuthenticated = Boolean(session);
-  const currentUser = data.users.find((item) => item.id === session?.userId) || data.users[0];
+  const currentUser = useMemo<AppUser>(() => {
+    const existing = data.users.find((item) => item.id === session?.userId);
+    if (existing) return existing;
+    return {
+      id: session?.userId || "",
+      uid: session?.userId,
+      companyId: session?.companyId || data.company.id,
+      displayName: session?.displayName || "Utilisateur Polaris",
+      email: session?.email || "",
+      role: (session?.role as AppUser["role"]) || "admin",
+      photoURL: session?.photoURL,
+      preferredLanguage: session?.preferredLanguage as AppUser["preferredLanguage"],
+      preferredLanguageLabel: session?.preferredLanguageLabel,
+      isActive: true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+  }, [data.company.id, data.users, session]);
   const selectedIntervention = data.interventions.find((item) => item.id === selectedInterventionId);
   const activeInterventions = data.interventions.filter((item) => item.contentStatus === "brouillon");
+  const t = useMemo(() => createTranslator(currentUser.preferredLanguage), [currentUser.preferredLanguage]);
 
   const filteredInterventions = useMemo(() => {
     const normalized = makeSearchIndex([query]);
@@ -144,21 +170,44 @@ export function App() {
 
   useEffect(() => {
     const unsubscribe = getFirebaseAuthState((user) => {
-      if (!user) return;
-      const nextSession: AuthSession = {
-        mode: "firebase",
-        userId: user.uid,
-        email: user.email || ""
-      };
-      setSession(nextSession);
-      void loadData(nextSession.userId);
+      if (!user) {
+        setSession(null);
+        setIsAuthReady(true);
+        setIsLoading(false);
+        return;
+      }
+      setIsLoading(true);
+      void ensureUserProfile(user)
+        .then(async (nextSession) => {
+          setAccessDenied(null);
+          setSession(nextSession);
+          await loadData(nextSession.userId, nextSession);
+        })
+        .catch((error) => {
+          setSession(null);
+          const reason = error instanceof Error ? error.message : "Connexion impossible.";
+          if (error instanceof AuthAccessDeniedError) {
+            setAccessDenied({ email: error.email, reason });
+            void signOutCurrentSession();
+          } else {
+            setAuthError(reason);
+          }
+        })
+        .finally(() => {
+          setIsAuthReady(true);
+          setIsLoading(false);
+        });
     });
+    if (!unsubscribe) {
+      setIsAuthReady(true);
+      setAuthError("Firebase n'est pas configure. Renseignez les variables d'environnement pour vous connecter.");
+    }
     return () => {
       if (unsubscribe) unsubscribe();
     };
   }, []);
 
-  async function loadData(userId?: string) {
+  async function loadData(userId?: string, activeSession = session) {
     setIsLoading(true);
     setAuthError("");
     try {
@@ -174,28 +223,29 @@ export function App() {
       const fallbackData = await fallbackRepository.load();
       setAppRepository(fallbackRepository);
       setData(fallbackData);
-      setSession({
-        mode: "local",
-        userId: fallbackData.users[0].id,
-        email: fallbackData.users[0].email
-      });
-      setStatusMessage("Firestore indisponible. Mode local actif.");
+      if (activeSession) setSession(activeSession);
+      setStatusMessage("Donnees cloud indisponibles. Mode local de secours actif pour cette session.");
     } finally {
       setIsLoading(false);
     }
   }
 
-  async function handleSignIn(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function handleGoogleSignIn() {
     setIsLoading(true);
     setAuthError("");
+    setAccessDenied(null);
     try {
-      const result = await signIn(authEmail, authPassword);
-      setSession(result.session);
-      await loadData(result.session.mode === "firebase" ? result.session.userId : undefined);
-      setStatusMessage(result.fallbackReason || "Connexion Firebase active.");
+      const nextSession = await signInWithGoogle();
+      setSession(nextSession);
+      await loadData(nextSession.userId, nextSession);
+      setStatusMessage("Connexion Google active.");
     } catch (error) {
-      setAuthError(error instanceof Error ? error.message : "Connexion impossible.");
+      const reason = error instanceof Error ? error.message : "Connexion impossible.";
+      if (error instanceof AuthAccessDeniedError) {
+        setAccessDenied({ email: error.email, reason });
+      } else {
+        setAuthError(reason);
+      }
     } finally {
       setIsLoading(false);
     }
@@ -265,65 +315,134 @@ export function App() {
     setData(await appRepository.recordDocumentView(data, documentId, currentUser.id));
   }
 
+  async function updatePreferredLanguage(language: AppUser["preferredLanguage"], label: string) {
+    setLanguageError("");
+    if (!language) {
+      const message = "Selection de langue invalide.";
+      console.error(message);
+      setLanguageError(message);
+      return;
+    }
+    setIsLoading(true);
+    try {
+      const nextData = await appRepository.updateUserLanguage(data, currentUser.id, language, label);
+      setData(nextData);
+      setSession((current) =>
+        current
+          ? {
+              ...current,
+              preferredLanguage: language,
+              preferredLanguageLabel: label
+            }
+          : current
+      );
+      setView("home");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "La langue n'a pas pu etre enregistree.";
+      console.error(message, error);
+      setLanguageError(message);
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  async function saveDiagnostic(diagnostic: AppData["diagnostics"][number], photos: AppData["diagnosticPhotos"], messages: AppData["diagnosticMessages"]) {
+    setData(await appRepository.saveDiagnostic(data, diagnostic, photos, messages));
+  }
+
   async function handleSignOut() {
     await signOutCurrentSession();
     setSession(null);
+    setAccessDenied(null);
     setView("home");
     setStatusMessage("");
   }
 
-  if (!isAuthenticated) {
+  async function useAnotherAccount() {
+    await signOutCurrentSession();
+    setSession(null);
+    setAccessDenied(null);
+    setAuthError("");
+    await handleGoogleSignIn();
+  }
+
+  if (!isAuthReady) {
     return (
       <main className="login-screen">
         <section className="login-panel">
           <div className="brand-mark">P</div>
           <p className="eyebrow">Polaris CVC</p>
-          <h1>Depannage CVC terrain</h1>
-          <p className="muted">
-            Base professionnelle mobile-first. Firebase est {firebaseReady ? "configure" : "pret a configurer"}.
-          </p>
-          {statusMessage && <p className="notice">{statusMessage}</p>}
-          {authError && <p className="auth-error">{authError}</p>}
-          <form className="login-form" onSubmit={handleSignIn}>
-            <label>
-              Email
-              <input value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} inputMode="email" />
-            </label>
-            <label>
-              Mot de passe
-              <input value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} type="password" />
-            </label>
-            <button className="primary large" disabled={isLoading}>
-              <ShieldCheck size={22} /> {isLoading ? "Connexion..." : "Se connecter"}
-            </button>
-          </form>
+          <h1>{t("loadingTitle")}</h1>
+          <p className="muted">{t("loadingText")}</p>
         </section>
       </main>
     );
   }
 
-  return (
-    <div className="shell">
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">Polaris CVC</p>
-          <h1>{titleForView(view)}</h1>
-        </div>
-        <div className={`sync sync-${navigator.onLine ? "ok" : "offline"}`}>
-          {navigator.onLine ? "Sync en attente" : "Hors ligne"}
-        </div>
-      </header>
+  if (!isAuthenticated) {
+    if (accessDenied) {
+      return (
+        <AccessDeniedView
+          email={accessDenied.email}
+          reason={accessDenied.reason}
+          isLoading={isLoading}
+          onUseAnotherAccount={useAnotherAccount}
+          onSignOut={handleSignOut}
+        />
+      );
+    }
 
-      <main className="content">
+    return (
+      <main className="login-screen">
+        <section className="login-panel">
+          <div className="brand-mark">P</div>
+          <p className="eyebrow">Polaris CVC</p>
+          <h1>{t("loginTitle")}</h1>
+          <p className="muted">{t("loginText")}</p>
+          <p className={firebaseReady ? "notice" : "auth-error"}>
+            {firebaseReady ? t("firebaseReady") : t("firebaseMissing")}
+          </p>
+          {statusMessage && <p className="notice">{statusMessage}</p>}
+          {authError && <p className="auth-error">{authError}</p>}
+          <button className="primary large" disabled={isLoading || !firebaseReady} onClick={handleGoogleSignIn}>
+            <ShieldCheck size={22} /> {isLoading ? t("signingIn") : t("continueGoogle")}
+          </button>
+        </section>
+      </main>
+    );
+  }
+
+  if (!hasConfiguredLanguage(currentUser.preferredLanguage)) {
+    return (
+      <LanguageSelectionScreen
+        user={currentUser}
+        isSaving={isLoading}
+        error={languageError}
+        t={t}
+        onSelect={(language, label) => updatePreferredLanguage(language, label || getLanguageLabel(language || "fr"))}
+      />
+    );
+  }
+
+  return (
+    <AppShell
+      data={data}
+      user={currentUser}
+      activeView={view}
+      title={titleForView(view, t)}
+      onNavigate={(nextView) => setView(nextView)}
+      onSignOut={handleSignOut}
+    >
         {view === "home" && (
-          <HomeView
-            activeCount={activeInterventions.length}
-            onNavigate={setView}
-            onSearch={() => {
-              setQuery("");
-              setView("interventions");
-            }}
-          />
+          <Dashboard data={data} user={currentUser} onNavigate={(nextView) => setView(nextView)} />
+        )}
+
+        {view === "diagnosticNew" && (
+          <DiagnosticStartView data={data} user={currentUser} onSave={saveDiagnostic} />
+        )}
+
+        {view === "diagnostics" && (
+          <DiagnosticArchivesView data={data} query={diagnosticQuery} onQueryChange={setDiagnosticQuery} />
         )}
 
         {view === "new" && (
@@ -341,7 +460,7 @@ export function App() {
             data={data}
             interventions={activeInterventions}
             onOpen={openIntervention}
-            emptyText="Aucune intervention en cours."
+            emptyText={t("noCurrentIntervention")}
           />
         )}
 
@@ -371,6 +490,8 @@ export function App() {
 
         {view === "customers" && (
           <SimpleList
+            emptyTitle="Aucun client"
+            emptyDescription="Les clients reels apparaitront ici apres creation ou synchronisation."
             items={data.customers.map((item) => ({
               id: item.id,
               title: item.name,
@@ -381,6 +502,8 @@ export function App() {
 
         {view === "sites" && (
           <SimpleList
+            emptyTitle="Aucun site"
+            emptyDescription="Les sites reels apparaitront ici apres creation ou synchronisation."
             items={data.sites.map((item) => ({
               id: item.id,
               title: item.name,
@@ -391,6 +514,8 @@ export function App() {
 
         {view === "equipment" && (
           <SimpleList
+            emptyTitle="Aucun equipement"
+            emptyDescription="Les equipements reels apparaitront ici apres creation ou synchronisation."
             items={data.equipment.map((item) => ({
               id: item.id,
               title: item.label,
@@ -423,18 +548,31 @@ export function App() {
         )}
 
         {view === "team" && (
-          <SimpleList
-            items={data.users.map((item) => ({
-              id: item.id,
-              title: item.displayName,
-              subtitle: `${roleLabel(item.role)} - ${item.email}`
-            }))}
-          />
+          isAdminRole(currentUser.role) ? (
+            <SimpleList
+              emptyTitle={t("noAdditionalUser")}
+              emptyDescription={t("realDataWillAppear")}
+              items={ensureVisibleUsers(data.users, currentUser).map((item) => ({
+                id: item.id,
+                title: item.displayName,
+                subtitle: `${roleLabel(item.role)} - ${item.email}`
+              }))}
+            />
+          ) : (
+            <ModulePlaceholder title="Utilisateurs" description="Ce module est reserve aux administrateurs Polaris." />
+          )
         )}
 
         {view === "profile" && (
           <section className="stack">
-            <InfoCard title={currentUser.displayName} subtitle={roleLabel(currentUser.role)} icon={<Users />} />
+            <article className="profile-card">
+              <UserAvatar user={currentUser} size="large" />
+              <div>
+                <strong>{currentUser.displayName}</strong>
+                <small>{currentUser.email}</small>
+                <span className="status-pill">{roleLabel(currentUser.role)}</span>
+              </div>
+            </article>
             <InfoCard title="Stockage" subtitle={appRepository.mode === "firestore" ? "Firestore actif" : "Mode local"} icon={<ShieldCheck />} />
             <button className="secondary" onClick={handleSignOut}>
               <LogOut size={20} /> Deconnexion
@@ -444,30 +582,11 @@ export function App() {
 
         {view === "company" && (
           <section className="stack">
-            <InfoCard title={data.company.name} subtitle="Parametres entreprise et isolation des donnees par companyId." icon={<Building2 />} />
+            <InfoCard title={data.company.name} subtitle={t("settings")} icon={<Building2 />} />
             <InfoCard title="IA" subtitle="Service abstrait cree. Fournisseur non active dans cette version." icon={<ShieldCheck />} />
           </section>
         )}
-      </main>
-
-      <nav className="bottom-nav" aria-label="Navigation principale">
-        <button className={view === "home" ? "active" : ""} onClick={() => setView("home")} aria-label="Accueil">
-          <Home size={22} />
-        </button>
-        <button className={view === "new" ? "active" : ""} onClick={() => setView("new")} aria-label="Nouvelle intervention">
-          <Plus size={24} />
-        </button>
-        <button className={view === "interventions" ? "active" : ""} onClick={() => setView("interventions")} aria-label="Interventions">
-          <ClipboardList size={22} />
-        </button>
-        <button className={view === "documents" ? "active" : ""} onClick={() => setView("documents")} aria-label="Documentation">
-          <BookOpen size={22} />
-        </button>
-        <button className={view === "profile" ? "active" : ""} onClick={() => setView("profile")} aria-label="Profil">
-          <Users size={22} />
-        </button>
-      </nav>
-    </div>
+    </AppShell>
   );
 }
 
@@ -503,6 +622,40 @@ function HomeView({
         </button>
       ))}
     </section>
+  );
+}
+
+function AccessDeniedView({
+  email,
+  reason,
+  isLoading,
+  onUseAnotherAccount,
+  onSignOut
+}: {
+  email: string;
+  reason: string;
+  isLoading: boolean;
+  onUseAnotherAccount: () => void;
+  onSignOut: () => void;
+}) {
+  return (
+    <main className="login-screen">
+      <section className="login-panel">
+        <div className="brand-mark">P</div>
+        <p className="eyebrow">Polaris CVC</p>
+        <h1>Acces refuse</h1>
+        <article className="access-denied-card">
+          <strong>{email || "Compte Google"}</strong>
+          <small>{reason}</small>
+        </article>
+        <button className="primary large" disabled={isLoading} onClick={onUseAnotherAccount}>
+          <Users size={20} /> {isLoading ? "Connexion..." : "Utiliser un autre compte"}
+        </button>
+        <button className="secondary" disabled={isLoading} onClick={onSignOut}>
+          <LogOut size={20} /> Se deconnecter
+        </button>
+      </section>
+    </main>
   );
 }
 
@@ -598,11 +751,6 @@ function InterventionForm({
         </select>
       </label>
 
-      <div className="voice-placeholder">
-        <FileText size={20} />
-        Notes vocales prevues. Transcription automatique non activee.
-      </div>
-
       <button className="primary large sticky-action" onClick={onSubmit}>
         <CheckCircle2 size={22} /> Creer l'intervention
       </button>
@@ -614,14 +762,22 @@ function InterventionList({
   data,
   interventions,
   onOpen,
-  emptyText = "Aucune intervention trouvee."
+  emptyText = "Aucune intervention"
 }: {
   data: AppData;
   interventions: AppData["interventions"];
   onOpen: (id: string) => void;
   emptyText?: string;
 }) {
-  if (interventions.length === 0) return <p className="muted">{emptyText}</p>;
+  if (interventions.length === 0) {
+    return (
+      <article className="empty-state">
+        <ClipboardList size={24} />
+        <strong>{emptyText}</strong>
+        <small>Les interventions reelles apparaitront ici apres creation ou synchronisation.</small>
+      </article>
+    );
+  }
   return (
     <section className="stack">
       {interventions.map((intervention) => {
@@ -632,7 +788,7 @@ function InterventionList({
             <span className="status-pill">{intervention.contentStatus.replace("_", " ")}</span>
             <strong>{intervention.title}</strong>
             <small>
-              {intervention.number} - {customer?.name} - par {author?.displayName}
+              {[intervention.number, customer?.name, author?.displayName ? `par ${author.displayName}` : undefined].filter(Boolean).join(" - ")}
             </small>
           </button>
         );
@@ -842,8 +998,8 @@ function EquipmentIdentificationResult({ identification }: { identification: Equ
       <article className="identification-card">
         <div className="result-head">
           <div>
-            <p className="eyebrow">Identification simulee</p>
-            <h2>{[identification.manufacturer, identification.model].filter(Boolean).join(" ")}</h2>
+            <p className="eyebrow">Identification non connectee</p>
+            <h2>{[identification.manufacturer, identification.model].filter(Boolean).join(" ") || "Aucun equipement identifie"}</h2>
           </div>
           <span className="confidence-badge">{Math.round(identification.confidence * 100)}%</span>
         </div>
@@ -861,27 +1017,6 @@ function EquipmentIdentificationResult({ identification }: { identification: Equ
         <p className="muted">{identification.remarks}</p>
       </article>
 
-      <section className="form-card compact">
-        <div className="section-title">
-          <ShieldCheck size={20} />
-          <strong>Actions disponibles plus tard</strong>
-        </div>
-        <button className="secondary" disabled>
-          <BookOpen size={20} /> Rechercher la documentation
-        </button>
-        <button className="secondary" disabled>
-          <Clock size={20} /> Voir les interventions precedentes
-        </button>
-        <button className="secondary" disabled>
-          <ClipboardList size={20} /> Creer une intervention
-        </button>
-        <button className="secondary" disabled>
-          <Plus size={20} /> Ajouter a la base Polaris
-        </button>
-        <button className="secondary" disabled>
-          <AlertTriangle size={20} /> Signaler une erreur d'identification
-        </button>
-      </section>
     </section>
   );
 }
@@ -1026,7 +1161,7 @@ function TechnicalLibraryView({
         {documents.length === 0 ? (
           <article className="empty-state">
             <FileText size={24} />
-            <strong>Aucun document classe</strong>
+            <strong>Aucun document disponible</strong>
             <small>La structure est prete pour les imports, les favoris, les recherches rapides et l'indexation future.</small>
           </article>
         ) : (
@@ -1086,21 +1221,29 @@ function TechnicalLibraryView({
         )}
       </section>
 
-      <section className="library-future">
-        <div>
-          <Tags size={20} />
-          <span>Index IA prepare</span>
-        </div>
-        <div>
-          <Bot size={20} />
-          <span>Robot constructeur en attente de validation utilisateur</span>
-        </div>
-      </section>
     </section>
   );
 }
 
-function SimpleList({ items }: { items: Array<{ id: string; title: string; subtitle: string }> }) {
+function SimpleList({
+  items,
+  emptyTitle = "Aucun element",
+  emptyDescription = "Les donnees reelles apparaitront ici des qu'elles seront disponibles."
+}: {
+  items: Array<{ id: string; title: string; subtitle: string }>;
+  emptyTitle?: string;
+  emptyDescription?: string;
+}) {
+  if (items.length === 0) {
+    return (
+      <article className="empty-state">
+        <FileText size={24} />
+        <strong>{emptyTitle}</strong>
+        <small>{emptyDescription}</small>
+      </article>
+    );
+  }
+
   return (
     <section className="stack">
       {items.map((item) => (
@@ -1186,21 +1329,23 @@ function ReportSections({ intervention }: { intervention: AppData["interventions
   );
 }
 
-function titleForView(view: View): string {
+function titleForView(view: View, t: (key: TranslationKey) => string): string {
   const titles: Record<View, string> = {
-    home: "Accueil",
-    new: "Nouvelle intervention",
-    active: "En cours",
-    interventions: "Interventions",
-    detail: "Detail intervention",
+    home: t("dashboard"),
+    diagnosticNew: t("diagnostic"),
+    diagnostics: t("diagnosticsArchive"),
+    new: t("interventionNew"),
+    active: t("interventionCurrent"),
+    interventions: t("interventions"),
+    detail: t("interventions"),
     customers: "Clients",
     sites: "Sites",
-    equipment: "Equipements",
-    identifyEquipment: "Identifier un equipement",
-    documents: "Documentation",
-    team: "Equipe",
-    profile: "Profil",
-    company: "Entreprise"
+    equipment: t("identifiedEquipment"),
+    identifyEquipment: t("identifyEquipment"),
+    documents: t("documents"),
+    team: t("users"),
+    profile: t("profile"),
+    company: t("company")
   };
   return titles[view];
 }

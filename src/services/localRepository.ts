@@ -1,6 +1,10 @@
 import {
   AppData,
+  AppUser,
   ContentStatus,
+  Diagnostic,
+  DiagnosticMessage,
+  DiagnosticPhoto,
   DocumentFavorite,
   DocumentImportBatch,
   DocumentImportCandidate,
@@ -13,9 +17,9 @@ import {
 import { buildDocumentSearchIndex } from "./documentLibraryService";
 import type { AppRepository } from "./repository";
 
-const STORAGE_KEY = "polaris-cvc-demo-data";
-const COMPANY_ID = "company-polaris-demo";
-const TECH_ID = "user-mila";
+const STORAGE_KEY = "polaris-cvc-data";
+const LEGACY_STORAGE_KEY = "polaris-cvc-demo-data";
+const LOCAL_COMPANY_ID = "local";
 
 function now(): string {
   return new Date().toISOString();
@@ -25,105 +29,26 @@ function id(prefix: string): string {
   return `${prefix}-${crypto.randomUUID()}`;
 }
 
-export function createSeedData(): AppData {
+export function createEmptyData(companyId = LOCAL_COMPANY_ID, companyName = "Polaris CVC"): AppData {
   const timestamp = now();
   return {
     company: {
-      id: COMPANY_ID,
-      name: "Entreprise demo Polaris",
+      id: companyId,
+      name: companyName,
       reportFooter: "Rapport genere par Polaris CVC",
       createdAt: timestamp,
       updatedAt: timestamp
     },
-    users: [
-      {
-        id: TECH_ID,
-        companyId: COMPANY_ID,
-        displayName: "Mila Laurent",
-        email: "mila@polaris.local",
-        role: "technicien",
-        phone: "06 00 00 00 00",
-        createdAt: timestamp,
-        updatedAt: timestamp
-      },
-      {
-        id: "user-samir",
-        companyId: COMPANY_ID,
-        displayName: "Samir Cohen",
-        email: "samir@polaris.local",
-        role: "referent_technique",
-        createdAt: timestamp,
-        updatedAt: timestamp
-      }
-    ],
-    customers: [
-      {
-        id: "customer-clinique-nord",
-        companyId: COMPANY_ID,
-        name: "Clinique du Nord",
-        contactName: "A. Morel",
-        phone: "01 42 00 00 00",
-        email: "maintenance@clinique-nord.local",
-        createdAt: timestamp,
-        updatedAt: timestamp
-      }
-    ],
-    sites: [
-      {
-        id: "site-bloc-a",
-        companyId: COMPANY_ID,
-        customerId: "customer-clinique-nord",
-        name: "Bloc A - toiture technique",
-        address: "18 avenue des Ateliers, 75018 Paris",
-        accessNotes: "Badge accueil puis local technique niveau R+4.",
-        createdAt: timestamp,
-        updatedAt: timestamp
-      }
-    ],
-    equipment: [
-      {
-        id: "equipment-rooftop-1",
-        companyId: COMPANY_ID,
-        siteId: "site-bloc-a",
-        label: "Rooftop consultation 1",
-        brand: "Carrier",
-        range: "AquaSnap",
-        model: "30RBP",
-        serialNumber: "CVC-30RBP-2024-001",
-        createdAt: timestamp,
-        updatedAt: timestamp
-      }
-    ],
+    users: [],
+    customers: [],
+    sites: [],
+    equipment: [],
     equipmentIdentifications: [],
-    interventions: [
-      {
-        id: "intervention-demo-1",
-        companyId: COMPANY_ID,
-        number: "INT-2026-0001",
-        customerId: "customer-clinique-nord",
-        siteId: "site-bloc-a",
-        equipmentId: "equipment-rooftop-1",
-        authorId: "user-samir",
-        assignedTechnicianId: "user-samir",
-        title: "Defaut haute pression intermittent",
-        requestedBy: "A. Morel",
-        customerRequest: "Remise en service apres plusieurs alarmes HP.",
-        observedSymptom: "Arret compresseur apres montee rapide de pression.",
-        checksPerformed: "Controle condenseur, ventilateurs, pressostats et filtre.",
-        measures: "HP 28 bar, BP 5.2 bar, air exterieur 31 C.",
-        diagnosis: "Echange condenseur degrade par encrassement.",
-        workDone: "Nettoyage condenseur, controle rotation ventilateurs, essai charge.",
-        finalResult: "Fonctionnement stabilise apres essai 35 minutes.",
-        recommendations: "Planifier nettoyage preventif trimestriel.",
-        resultStatus: "resolu",
-        contentStatus: "termine",
-        startedAt: timestamp,
-        completedAt: timestamp,
-        syncState: "synchronise",
-        createdAt: timestamp,
-        updatedAt: timestamp
-      }
-    ],
+    diagnostics: [],
+    diagnosticPhotos: [],
+    diagnosticMessages: [],
+    diagnosticDocumentLinks: [],
+    interventions: [],
     measurements: [],
     media: [],
     documents: [],
@@ -132,18 +57,7 @@ export function createSeedData(): AppData {
     documentRecentViews: [],
     documentImportBatches: [],
     documentImportCandidates: [],
-    aiAnalyses: [
-      {
-        id: "ai-placeholder-1",
-        companyId: COMPANY_ID,
-        interventionId: "intervention-demo-1",
-        provider: "none",
-        feature: "comparaison_anciennes_interventions",
-        status: "prevu_non_active",
-        createdAt: timestamp,
-        updatedAt: timestamp
-      }
-    ],
+    aiAnalyses: [],
     activityLogs: []
   };
 }
@@ -156,11 +70,9 @@ export class LocalRepository implements AppRepository {
   }
 
   loadSync(): AppData {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_STORAGE_KEY);
     if (!raw) {
-      const seed = createSeedData();
-      this.save(seed);
-      return seed;
+      return createEmptyData();
     }
     return migrateAppData(JSON.parse(raw) as AppData);
   }
@@ -169,7 +81,7 @@ export class LocalRepository implements AppRepository {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   }
 
-  async createIntervention(data: AppData, draft: InterventionDraft, authorId = TECH_ID): Promise<AppData> {
+  async createIntervention(data: AppData, draft: InterventionDraft, authorId: string): Promise<AppData> {
     const timestamp = now();
     const intervention: Intervention = {
       ...draft,
@@ -329,14 +241,49 @@ export class LocalRepository implements AppRepository {
     this.save(next);
     return next;
   }
+
+  async updateUserLanguage(data: AppData, userId: string, language: AppUser["preferredLanguage"], label: string): Promise<AppData> {
+    const timestamp = now();
+    const next = {
+      ...data,
+      users: data.users.map((user) =>
+        user.id === userId
+          ? {
+              ...user,
+              preferredLanguage: language,
+              preferredLanguageLabel: label,
+              languageConfiguredAt: user.languageConfiguredAt || timestamp,
+              updatedAt: timestamp
+            }
+          : user
+      )
+    };
+    this.save(next);
+    return next;
+  }
+
+  async saveDiagnostic(data: AppData, diagnostic: Diagnostic, photos: DiagnosticPhoto[], messages: DiagnosticMessage[]): Promise<AppData> {
+    const existingDiagnosticIds = new Set(data.diagnostics.map((item) => item.id));
+    const next = {
+      ...data,
+      diagnostics: existingDiagnosticIds.has(diagnostic.id)
+        ? data.diagnostics.map((item) => (item.id === diagnostic.id ? diagnostic : item))
+        : [diagnostic, ...data.diagnostics],
+      diagnosticPhotos: [...photos, ...data.diagnosticPhotos.filter((item) => item.diagnosticId !== diagnostic.id)],
+      diagnosticMessages: [...messages, ...data.diagnosticMessages.filter((item) => item.diagnosticId !== diagnostic.id)]
+    };
+    this.save(next);
+    return next;
+  }
 }
 
 export const repository = new LocalRepository();
 
 function migrateAppData(data: AppData): AppData {
+  const withoutLegacyDemo = removeLegacyDemoData(data);
   return {
-    ...data,
-    documents: (data.documents || []).map((document) => ({
+    ...withoutLegacyDemo,
+    documents: (withoutLegacyDemo.documents || []).map((document) => ({
       ...document,
       productFamily: document.productFamily,
       model: document.model || document.compatibleModel,
@@ -347,15 +294,44 @@ function migrateAppData(data: AppData): AppData {
       searchIndex: document.searchIndex || buildDocumentSearchIndex(document),
       indexStatus: document.indexStatus || "metadonnees"
     })),
-    documentLinks: (data.documentLinks || []).map((link) => ({
+    documentLinks: (withoutLegacyDemo.documentLinks || []).map((link) => ({
       ...link,
       confidence: link.confidence ?? 1,
       reason: link.reason || "manuel"
     })),
-    documentFavorites: (data.documentFavorites || []) as DocumentFavorite[],
-    documentRecentViews: (data.documentRecentViews || []) as DocumentRecentView[],
-    documentImportBatches: (data.documentImportBatches || []) as DocumentImportBatch[],
-    documentImportCandidates: (data.documentImportCandidates || []) as DocumentImportCandidate[],
-    equipmentIdentifications: data.equipmentIdentifications || []
+    documentFavorites: (withoutLegacyDemo.documentFavorites || []) as DocumentFavorite[],
+    documentRecentViews: (withoutLegacyDemo.documentRecentViews || []) as DocumentRecentView[],
+    documentImportBatches: (withoutLegacyDemo.documentImportBatches || []) as DocumentImportBatch[],
+    documentImportCandidates: (withoutLegacyDemo.documentImportCandidates || []) as DocumentImportCandidate[],
+    equipmentIdentifications: withoutLegacyDemo.equipmentIdentifications || [],
+    diagnostics: withoutLegacyDemo.diagnostics || [],
+    diagnosticPhotos: withoutLegacyDemo.diagnosticPhotos || [],
+    diagnosticMessages: withoutLegacyDemo.diagnosticMessages || [],
+    diagnosticDocumentLinks: withoutLegacyDemo.diagnosticDocumentLinks || []
+  };
+}
+
+function removeLegacyDemoData(data: AppData): AppData {
+  const demoIds = new Set([
+    "user-mila",
+    "user-samir",
+    "customer-clinique-nord",
+    "site-bloc-a",
+    "equipment-rooftop-1",
+    "intervention-demo-1",
+    "ai-placeholder-1"
+  ]);
+  const isDemo = (item: { id: string }) => demoIds.has(item.id);
+
+  return {
+    ...data,
+    company: data.company.id === "company-polaris-demo" ? createEmptyData().company : data.company,
+    users: (data.users || []).filter((item) => !isDemo(item)),
+    customers: (data.customers || []).filter((item) => !isDemo(item)),
+    sites: (data.sites || []).filter((item) => !isDemo(item)),
+    equipment: (data.equipment || []).filter((item) => !isDemo(item)),
+    interventions: (data.interventions || []).filter((item) => !isDemo(item)),
+    aiAnalyses: (data.aiAnalyses || []).filter((item) => !isDemo(item)),
+    activityLogs: (data.activityLogs || []).filter((item) => !demoIds.has(item.actorId) && !demoIds.has(item.entityId))
   };
 }

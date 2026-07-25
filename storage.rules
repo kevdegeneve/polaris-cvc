@@ -5,10 +5,62 @@ service firebase.storage {
       return request.auth != null;
     }
 
-    match /companies/{companyId}/{allPaths=**} {
-      allow read, write: if signedIn()
+    function hasActiveProfile() {
+      return signedIn()
         && firestore.exists(/databases/(default)/documents/users/$(request.auth.uid))
+        && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.isActive == true;
+    }
+
+    function sameCompany(companyId) {
+      return hasActiveProfile()
         && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.companyId == companyId;
+    }
+
+    function diagnosticPath(diagnosticId) {
+      return /databases/(default)/documents/diagnostics/$(diagnosticId);
+    }
+
+    function canAccessDiagnostic(diagnosticId) {
+      return hasActiveProfile()
+        && firestore.exists(diagnosticPath(diagnosticId))
+        && sameCompany(firestore.get(diagnosticPath(diagnosticId)).data.companyId)
+        && (
+          firestore.get(diagnosticPath(diagnosticId)).data.technicianId == request.auth.uid
+          || firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role in ["admin", "administrateur"]
+        );
+    }
+
+    match /diagnostics/{diagnosticId}/photos/{photoFileName} {
+      allow read: if canAccessDiagnostic(diagnosticId);
+      allow create: if hasActiveProfile()
+        && canAccessDiagnostic(diagnosticId)
+        && request.resource.size < 10 * 1024 * 1024
+        && request.resource.contentType in ["image/jpeg", "image/png", "image/webp"];
+      allow update, delete: if false;
+    }
+
+    match /documents/originals/{documentId}/{fileName} {
+      allow read: if hasActiveProfile();
+      allow create: if hasActiveProfile()
+        && request.resource.size < 50 * 1024 * 1024
+        && request.resource.contentType.matches('application/pdf|image/.*');
+      allow update, delete: if false;
+    }
+
+    match /documents/localized/{language}/{documentId}/{fileName} {
+      allow read: if hasActiveProfile();
+      allow create: if hasActiveProfile()
+        && request.resource.size < 50 * 1024 * 1024
+        && request.resource.contentType.matches('application/pdf|image/.*');
+      allow update, delete: if false;
+    }
+
+    match /companies/{companyId}/technical-library/{allPaths=**} {
+      allow read: if sameCompany(companyId);
+      allow create: if sameCompany(companyId)
+        && request.resource.size < 50 * 1024 * 1024
+        && request.resource.contentType.matches('application/pdf|image/.*');
+      allow update, delete: if false;
     }
   }
 }
