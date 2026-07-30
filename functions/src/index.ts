@@ -202,7 +202,7 @@ export const analyzeDiagnostic = onCall(
         sourceReferences: result.sourceReferences || []
       };
       const validated = validateDiagnosticAIResult(finalResult);
-      const technicalMemoryInsight = await buildTechnicalMemoryInsight(diagnostic, validated);
+      const technicalMemoryInsight = await safelyBuildTechnicalMemoryInsight(diagnostic, validated, language);
       const title = buildArchiveTitle(validated);
 
       await diagnosticRef.set(
@@ -282,7 +282,28 @@ function readDiagnosticId(data: unknown): string {
   return data.diagnosticId;
 }
 
-async function buildTechnicalMemoryInsight(diagnostic: DiagnosticRecord, result: DiagnosticAIResult): Promise<TechnicalMemoryInsight> {
+async function safelyBuildTechnicalMemoryInsight(
+  diagnostic: DiagnosticRecord,
+  result: DiagnosticAIResult,
+  language: UserProfileRecord["preferredLanguage"]
+): Promise<TechnicalMemoryInsight> {
+  try {
+    return await buildTechnicalMemoryInsight(diagnostic, result, language);
+  } catch (error) {
+    console.warn("technical_memory_unavailable", {
+      diagnosticId: diagnostic.id,
+      companyId: diagnostic.companyId,
+      error: error instanceof Error ? error.message : "unknown"
+    });
+    return emptyTechnicalMemoryInsight();
+  }
+}
+
+async function buildTechnicalMemoryInsight(
+  diagnostic: DiagnosticRecord,
+  result: DiagnosticAIResult,
+  language: UserProfileRecord["preferredLanguage"]
+): Promise<TechnicalMemoryInsight> {
   const snapshot = await db.collection("technicalMemoryFeedbacks").where("companyId", "==", diagnostic.companyId).limit(500).get();
   const feedbacks = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }) as TechnicalMemoryFeedbackRecord);
   const similar = feedbacks.filter((feedback) => isSimilarMemoryCase(feedback, diagnostic, result));
@@ -290,8 +311,8 @@ async function buildTechnicalMemoryInsight(diagnostic: DiagnosticRecord, result:
   const partiallyRepairedCount = similar.filter((feedback) => feedback.repairResult === "repare_partiellement").length;
   const unrepairedCount = similar.filter((feedback) => feedback.repairResult === "non_repare").length;
   const durations = similar.map((feedback) => feedback.timeSpentMinutes).filter((value) => Number.isFinite(value) && value > 0);
-  const causeStats = countBy(similar, "actualCause", causeLabel, "cause");
-  const actionStats = countActions(similar);
+  const causeStats = countBy(similar, "actualCause", (value) => causeLabel(value, language), "cause");
+  const actionStats = countActions(similar, language);
   return {
     totalKnownCases: similar.length,
     repairedCount,
@@ -302,6 +323,20 @@ async function buildTechnicalMemoryInsight(diagnostic: DiagnosticRecord, result:
     mostFrequentCause: causeStats[0] || null,
     causeStats,
     actionStats
+  };
+}
+
+function emptyTechnicalMemoryInsight(): TechnicalMemoryInsight {
+  return {
+    totalKnownCases: 0,
+    repairedCount: 0,
+    partiallyRepairedCount: 0,
+    unrepairedCount: 0,
+    successRate: 0,
+    averageRepairTimeMinutes: null,
+    mostFrequentCause: null,
+    causeStats: [],
+    actionStats: []
   };
 }
 
@@ -343,13 +378,16 @@ function countBy<TField extends "actualCause">(
     .sort(sortByCountAndLabel);
 }
 
-function countActions(feedbacks: TechnicalMemoryFeedbackRecord[]): Array<{ action: string; label: string; count: number }> {
+function countActions(
+  feedbacks: TechnicalMemoryFeedbackRecord[],
+  language: UserProfileRecord["preferredLanguage"]
+): Array<{ action: string; label: string; count: number }> {
   const counts = new Map<string, number>();
   for (const feedback of feedbacks) {
     for (const action of feedback.actions || []) counts.set(action, (counts.get(action) || 0) + 1);
   }
   return Array.from(counts.entries())
-    .map(([action, count]) => ({ action, label: actionLabel(action), count }))
+    .map(([action, count]) => ({ action, label: actionLabel(action, language), count }))
     .sort(sortByCountAndLabel);
 }
 
@@ -357,8 +395,18 @@ function sortByCountAndLabel<T extends { count: number; label: string }>(left: T
   return right.count - left.count || left.label.localeCompare(right.label);
 }
 
-function causeLabel(value: string): string {
-  const labels: Record<string, string> = {
+function causeLabel(value: string, language: UserProfileRecord["preferredLanguage"]): string {
+  const labels = causeLabels[language || "fr"] || causeLabels.fr;
+  return labels[value] || value;
+}
+
+function actionLabel(value: string, language: UserProfileRecord["preferredLanguage"]): string {
+  const labels = actionLabels[language || "fr"] || actionLabels.fr;
+  return labels[value] || value;
+}
+
+const causeLabels: Record<string, Record<string, string>> = {
+  fr: {
     sonde_defectueuse: "Sonde defectueuse",
     carte_electronique_hs: "Carte electronique HS",
     ventilateur_bloque: "Ventilateur bloque",
@@ -368,12 +416,55 @@ function causeLabel(value: string): string {
     mauvais_cablage: "Mauvais cablage",
     parametrage: "Parametrage",
     autre: "Autre"
-  };
-  return labels[value] || value;
-}
+  },
+  en: {
+    sonde_defectueuse: "Faulty sensor",
+    carte_electronique_hs: "Failed electronic board",
+    ventilateur_bloque: "Blocked fan",
+    manque_de_fluide: "Low refrigerant charge",
+    fuite_detectee: "Leak detected",
+    connecteur_desserre: "Loose connector",
+    mauvais_cablage: "Incorrect wiring",
+    parametrage: "Parameter setting",
+    autre: "Other"
+  },
+  de: {
+    sonde_defectueuse: "Defekter Sensor",
+    carte_electronique_hs: "Defekte Elektronikplatine",
+    ventilateur_bloque: "Blockierter Ventilator",
+    manque_de_fluide: "Kaeltemittelmangel",
+    fuite_detectee: "Leck erkannt",
+    connecteur_desserre: "Lockerer Stecker",
+    mauvais_cablage: "Falsche Verkabelung",
+    parametrage: "Parametrierung",
+    autre: "Andere"
+  },
+  it: {
+    sonde_defectueuse: "Sonda difettosa",
+    carte_electronique_hs: "Scheda elettronica guasta",
+    ventilateur_bloque: "Ventilatore bloccato",
+    manque_de_fluide: "Mancanza di fluido",
+    fuite_detectee: "Perdita rilevata",
+    connecteur_desserre: "Connettore allentato",
+    mauvais_cablage: "Cablaggio errato",
+    parametrage: "Parametrizzazione",
+    autre: "Altro"
+  },
+  es: {
+    sonde_defectueuse: "Sonda defectuosa",
+    carte_electronique_hs: "Placa electronica averiada",
+    ventilateur_bloque: "Ventilador bloqueado",
+    manque_de_fluide: "Falta de fluido",
+    fuite_detectee: "Fuga detectada",
+    connecteur_desserre: "Conector flojo",
+    mauvais_cablage: "Cableado incorrecto",
+    parametrage: "Parametrizacion",
+    autre: "Otro"
+  }
+};
 
-function actionLabel(value: string): string {
-  const labels: Record<string, string> = {
+const actionLabels: Record<string, Record<string, string>> = {
+  fr: {
     remplacement_sonde: "Remplacement sonde",
     remplacement_carte: "Remplacement carte",
     ajout_fluide: "Ajout de fluide",
@@ -383,9 +474,52 @@ function actionLabel(value: string): string {
     resserrage_connecteur: "Resserrage connecteur",
     reparametrage: "Reparametrage",
     autre: "Autre"
-  };
-  return labels[value] || value;
-}
+  },
+  en: {
+    remplacement_sonde: "Sensor replacement",
+    remplacement_carte: "Board replacement",
+    ajout_fluide: "Refrigerant top-up",
+    recherche_fuite: "Leak search",
+    remplacement_ventilateur: "Fan replacement",
+    nettoyage: "Cleaning",
+    resserrage_connecteur: "Connector tightening",
+    reparametrage: "Reconfiguration",
+    autre: "Other"
+  },
+  de: {
+    remplacement_sonde: "Sensor ersetzt",
+    remplacement_carte: "Platine ersetzt",
+    ajout_fluide: "Kaeltemittel nachgefuellt",
+    recherche_fuite: "Lecksuche",
+    remplacement_ventilateur: "Ventilator ersetzt",
+    nettoyage: "Reinigung",
+    resserrage_connecteur: "Stecker nachgezogen",
+    reparametrage: "Neu parametriert",
+    autre: "Andere"
+  },
+  it: {
+    remplacement_sonde: "Sostituzione sonda",
+    remplacement_carte: "Sostituzione scheda",
+    ajout_fluide: "Aggiunta fluido",
+    recherche_fuite: "Ricerca perdita",
+    remplacement_ventilateur: "Sostituzione ventilatore",
+    nettoyage: "Pulizia",
+    resserrage_connecteur: "Serraggio connettore",
+    reparametrage: "Riconfigurazione",
+    autre: "Altro"
+  },
+  es: {
+    remplacement_sonde: "Sustitucion de sonda",
+    remplacement_carte: "Sustitucion de placa",
+    ajout_fluide: "Carga de fluido",
+    recherche_fuite: "Busqueda de fuga",
+    remplacement_ventilateur: "Sustitucion de ventilador",
+    nettoyage: "Limpieza",
+    resserrage_connecteur: "Apriete de conector",
+    reparametrage: "Reparametrizacion",
+    autre: "Otro"
+  }
+};
 
 async function readActiveUser(uid: string): Promise<UserProfileRecord> {
   const snap = await db.collection("users").doc(uid).get();

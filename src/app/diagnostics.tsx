@@ -30,6 +30,8 @@ import {
   createTechnicalMemoryFeedback,
   technicalMemoryActionOptions,
   technicalMemoryCauseOptions,
+  technicalMemoryCommentMaxLength,
+  technicalMemoryFreeTextMaxLength,
   technicalMemoryResultOptions,
   validateTechnicalMemoryFeedbackInput,
   type TechnicalMemoryFeedbackInput
@@ -128,6 +130,7 @@ export function DiagnosticStartView({
   const [preparedDiagnostic, setPreparedDiagnostic] = useState<Diagnostic | null>(null);
   const [preparedPhotos, setPreparedPhotos] = useState<DiagnosticPhoto[]>([]);
   const [analysisResult, setAnalysisResult] = useState<DiagnosticAIResult | null>(null);
+  const [isSavingMemory, setSavingMemory] = useState(false);
   const [memoryInput, setMemoryInput] = useState<TechnicalMemoryFeedbackInput>({
     actualCause: "sonde_defectueuse",
     actions: [],
@@ -309,33 +312,38 @@ export function DiagnosticStartView({
   }
 
   async function finishDiagnostic() {
-    if (!preparedDiagnostic) return;
+    if (!preparedDiagnostic || isSavingMemory) return;
     const validationErrors = validateTechnicalMemoryFeedbackInput(memoryInput);
     setMemoryErrors(validationErrors);
     if (validationErrors.length > 0) return;
     const timestamp = new Date().toISOString();
-    const technicalMemoryFeedback = createTechnicalMemoryFeedback({
-      diagnostic: preparedDiagnostic,
-      technicianId: user.id,
-      technicianName: user.displayName,
-      feedback: memoryInput
-    });
-    await onSaveTechnicalMemory(technicalMemoryFeedback);
-    const archivedDiagnostic: Diagnostic = {
-      ...preparedDiagnostic,
-      title: createDiagnosticArchiveTitle({
-        brand: preparedDiagnostic.detectedBrand,
-        errorCode: preparedDiagnostic.detectedErrorCode,
-        shortFaultDescription: preparedDiagnostic.shortFaultDescription
-      }),
-      status: "archived",
-      messageCount: conversation.length,
-      analysisSummary: "Archive creee sans analyse IA connectee. Les photos et la conversation sont conservees pour une analyse future.",
-      completedAt: timestamp,
-      archivedAt: timestamp,
-      updatedAt: timestamp
-    };
-    await onSave(archivedDiagnostic, preparedPhotos, conversation);
+    setSavingMemory(true);
+    try {
+      const technicalMemoryFeedback = createTechnicalMemoryFeedback({
+        diagnostic: preparedDiagnostic,
+        technicianId: user.id,
+        technicianName: user.displayName,
+        feedback: memoryInput
+      });
+      await onSaveTechnicalMemory(technicalMemoryFeedback);
+      const archivedDiagnostic: Diagnostic = {
+        ...preparedDiagnostic,
+        title: createDiagnosticArchiveTitle({
+          brand: preparedDiagnostic.detectedBrand,
+          errorCode: preparedDiagnostic.detectedErrorCode,
+          shortFaultDescription: preparedDiagnostic.shortFaultDescription
+        }),
+        status: "archived",
+        messageCount: conversation.length,
+        analysisSummary: "Archive creee sans analyse IA connectee. Les photos et la conversation sont conservees pour une analyse future.",
+        completedAt: timestamp,
+        archivedAt: timestamp,
+        updatedAt: timestamp
+      };
+      await onSave(archivedDiagnostic, preparedPhotos, conversation);
+    } finally {
+      setSavingMemory(false);
+    }
   }
 
   const memoryInsight = preparedDiagnostic?.technicalMemoryInsight
@@ -399,8 +407,8 @@ export function DiagnosticStartView({
       {conversation.length > 0 && (
         <>
           <DiagnosticConversation messages={conversation} />
-          <button className="primary large" onClick={finishDiagnostic}>
-            <Archive size={22} /> Terminer le diagnostic
+          <button className="primary large" disabled={isSavingMemory} onClick={finishDiagnostic}>
+            <Archive size={22} /> {isSavingMemory ? "Enregistrement..." : "Terminer le diagnostic"}
           </button>
         </>
       )}
@@ -472,7 +480,7 @@ function TechnicalMemoryFeedbackForm({
       {value.actualCause === "autre" && (
         <label>
           Cause libre
-          <input value={value.actualCauseOther || ""} onChange={(event) => onChange({ ...value, actualCauseOther: event.target.value })} />
+          <input maxLength={technicalMemoryFreeTextMaxLength} value={value.actualCauseOther || ""} onChange={(event) => onChange({ ...value, actualCauseOther: event.target.value })} />
         </label>
       )}
       <div className="memory-checkbox-grid">
@@ -486,7 +494,7 @@ function TechnicalMemoryFeedbackForm({
       {value.actions.includes("autre") && (
         <label>
           Action libre
-          <input value={value.actionOther || ""} onChange={(event) => onChange({ ...value, actionOther: event.target.value })} />
+          <input maxLength={technicalMemoryFreeTextMaxLength} value={value.actionOther || ""} onChange={(event) => onChange({ ...value, actionOther: event.target.value })} />
         </label>
       )}
       <div className="memory-radio-row">
@@ -507,13 +515,14 @@ function TechnicalMemoryFeedbackForm({
         <input
           type="number"
           min="1"
+          step="1"
           value={value.timeSpentMinutes || ""}
           onChange={(event) => onChange({ ...value, timeSpentMinutes: Number(event.target.value) })}
         />
       </label>
       <label>
         Commentaire libre
-        <textarea value={value.comment || ""} onChange={(event) => onChange({ ...value, comment: event.target.value })} rows={3} />
+        <textarea maxLength={technicalMemoryCommentMaxLength} value={value.comment || ""} onChange={(event) => onChange({ ...value, comment: event.target.value })} rows={3} />
       </label>
       {errors.length > 0 && (
         <div className="error-box">

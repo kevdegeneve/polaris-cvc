@@ -178,6 +178,8 @@ service cloud.firestore {
       allow read: if sameCompany(resource.data.companyId);
       allow create: if hasRequiredCompanyId()
         && sameCompany(request.resource.data.companyId)
+        && request.resource.data.id == feedbackId
+        && feedbackId == "technical-memory-" + request.resource.data.diagnosticId
         && request.resource.data.technicianId == request.auth.uid
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.updatedBy == request.auth.uid
@@ -195,12 +197,21 @@ service cloud.firestore {
         ]
         && request.resource.data.repairResult in ["repare", "repare_partiellement", "non_repare"]
         && request.resource.data.timeSpentMinutes is number
-        && request.resource.data.timeSpentMinutes > 0;
+        && request.resource.data.timeSpentMinutes > 0
+        && (!("comment" in request.resource.data) || request.resource.data.comment.size() <= 1200)
+        && (!("actualCauseOther" in request.resource.data) || request.resource.data.actualCauseOther.size() <= 160)
+        && (!("actionOther" in request.resource.data) || request.resource.data.actionOther.size() <= 160);
       allow update: if sameCompany(resource.data.companyId)
         && companyIdIsUnchanged()
+        && request.resource.data.id == resource.data.id
         && request.resource.data.diagnosticId == resource.data.diagnosticId
         && request.resource.data.technicianId == resource.data.technicianId
         && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.timeSpentMinutes is number
+        && request.resource.data.timeSpentMinutes > 0
+        && (!("comment" in request.resource.data) || request.resource.data.comment.size() <= 1200)
+        && (!("actualCauseOther" in request.resource.data) || request.resource.data.actualCauseOther.size() <= 160)
+        && (!("actionOther" in request.resource.data) || request.resource.data.actionOther.size() <= 160)
         && (resource.data.technicianId == request.auth.uid || isAdmin());
       allow delete: if false;
     }

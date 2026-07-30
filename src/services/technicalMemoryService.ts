@@ -9,6 +9,9 @@ import type {
   TechnicalMemoryRepairResult
 } from "../domain/types";
 
+export const technicalMemoryCommentMaxLength = 1200;
+export const technicalMemoryFreeTextMaxLength = 160;
+
 export const technicalMemoryCauseOptions: Array<{ value: TechnicalMemoryCause; label: string }> = [
   { value: "sonde_defectueuse", label: "Sonde defectueuse" },
   { value: "carte_electronique_hs", label: "Carte electronique HS" },
@@ -57,7 +60,7 @@ export function createTechnicalMemoryFeedback(input: {
 }): TechnicalMemoryFeedback {
   const timestamp = new Date().toISOString();
   return {
-    id: `technical-memory-${crypto.randomUUID()}`,
+    id: `technical-memory-${input.diagnostic.id}`,
     companyId: input.diagnostic.companyId,
     diagnosticId: input.diagnostic.id,
     technicianId: input.technicianId,
@@ -69,12 +72,12 @@ export function createTechnicalMemoryFeedback(input: {
     symptomSummary: input.diagnostic.shortFaultDescription || input.diagnostic.analysisSummary,
     aiProbableCauses: input.diagnostic.probableCauses,
     actualCause: input.feedback.actualCause,
-    actualCauseOther: cleanOptional(input.feedback.actualCauseOther),
+    actualCauseOther: cleanOptional(input.feedback.actualCauseOther, technicalMemoryFreeTextMaxLength),
     actions: input.feedback.actions,
-    actionOther: cleanOptional(input.feedback.actionOther),
+    actionOther: cleanOptional(input.feedback.actionOther, technicalMemoryFreeTextMaxLength),
     repairResult: input.feedback.repairResult,
     timeSpentMinutes: input.feedback.timeSpentMinutes,
-    comment: cleanOptional(input.feedback.comment),
+    comment: cleanOptional(input.feedback.comment, technicalMemoryCommentMaxLength),
     sourceLinks: [],
     createdBy: input.technicianId,
     updatedBy: input.technicianId,
@@ -87,10 +90,13 @@ export function validateTechnicalMemoryFeedbackInput(input: TechnicalMemoryFeedb
   const errors: string[] = [];
   if (!technicalMemoryCauseOptions.some((option) => option.value === input.actualCause)) errors.push("Cause reelle obligatoire.");
   if (input.actualCause === "autre" && !input.actualCauseOther?.trim()) errors.push("Precisez la cause reelle.");
+  if ((input.actualCauseOther?.trim().length || 0) > technicalMemoryFreeTextMaxLength) errors.push(`Cause libre limitee a ${technicalMemoryFreeTextMaxLength} caracteres.`);
   if (input.actions.length === 0) errors.push("Selectionnez au moins une action realisee.");
   if (input.actions.includes("autre") && !input.actionOther?.trim()) errors.push("Precisez l'action realisee.");
+  if ((input.actionOther?.trim().length || 0) > technicalMemoryFreeTextMaxLength) errors.push(`Action libre limitee a ${technicalMemoryFreeTextMaxLength} caracteres.`);
   if (!technicalMemoryResultOptions.some((option) => option.value === input.repairResult)) errors.push("Resultat obligatoire.");
   if (!Number.isFinite(input.timeSpentMinutes) || input.timeSpentMinutes <= 0) errors.push("Temps passe obligatoire.");
+  if ((input.comment?.trim().length || 0) > technicalMemoryCommentMaxLength) errors.push(`Commentaire limite a ${technicalMemoryCommentMaxLength} caracteres.`);
   return errors;
 }
 
@@ -151,9 +157,9 @@ function normalize(value: string): string {
   return value.trim().toLowerCase();
 }
 
-function cleanOptional(value?: string): string | undefined {
+function cleanOptional(value?: string, maxLength = technicalMemoryCommentMaxLength): string | undefined {
   const cleaned = value?.trim();
-  return cleaned || undefined;
+  return cleaned ? cleaned.slice(0, maxLength) : undefined;
 }
 
 function countCauses(feedbacks: TechnicalMemoryFeedback[]): TechnicalMemoryCauseStat[] {

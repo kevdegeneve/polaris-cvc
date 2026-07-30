@@ -23,7 +23,9 @@ describe("technicalMemoryService", () => {
     });
 
     expect(feedback.diagnosticId).toBe(diagnostic.id);
+    expect(feedback.id).toBe(`technical-memory-${diagnostic.id}`);
     expect(feedback.actualCause).toBe("sonde_defectueuse");
+    expect(feedback.comment).toBe("Sonde remplacee.");
     expect(diagnostic.analysisResult?.detectedBrand).toBe("Daikin");
   });
 
@@ -36,6 +38,23 @@ describe("technicalMemoryService", () => {
         timeSpentMinutes: 0
       })
     ).toEqual(["Precisez la cause reelle.", "Selectionnez au moins une action realisee.", "Temps passe obligatoire."]);
+  });
+
+  it("limits free text before storage", () => {
+    const longText = "x".repeat(1300);
+    const errors = validateTechnicalMemoryFeedbackInput({
+      actualCause: "autre",
+      actualCauseOther: "x".repeat(200),
+      actions: ["autre"],
+      actionOther: "x".repeat(200),
+      repairResult: "repare",
+      timeSpentMinutes: 30,
+      comment: longText
+    });
+
+    expect(errors).toContain("Cause libre limitee a 160 caracteres.");
+    expect(errors).toContain("Action libre limitee a 160 caracteres.");
+    expect(errors).toContain("Commentaire limite a 1200 caracteres.");
   });
 
   it("aggregates only similar known cases", () => {
