@@ -803,7 +803,8 @@ textarea {
 .diagnostic-step,
 .diagnostic-progress,
 .diagnostic-conversation,
-.diagnostic-archive-card {
+.diagnostic-archive-card,
+.technical-memory-card {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: white;
@@ -845,6 +846,60 @@ textarea {
 .diagnostic-message-card p,
 .diagnostic-archive-card p {
   margin: 0;
+}
+
+.technical-memory-card {
+  display: grid;
+  gap: 12px;
+}
+
+.memory-checkbox-grid,
+.memory-radio-row {
+  display: grid;
+  gap: 8px;
+}
+
+.memory-checkbox-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.memory-radio-row {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.memory-checkbox,
+.memory-radio {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: rgba(6, 12, 23, .36);
+}
+
+.memory-checkbox input,
+.memory-radio input {
+  width: auto;
+  min-height: auto;
+  accent-color: var(--primary);
+}
+
+.memory-stat-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.memory-stat-list span {
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: rgba(45, 168, 255, .10);
+  color: #d6f1ff;
+  border: 1px solid rgba(45, 168, 255, .22);
+  font-size: 12px;
+  font-weight: 850;
 }
 
 .capture-actions {
@@ -1582,6 +1637,7 @@ small {
 .diagnostic-progress,
 .diagnostic-conversation,
 .diagnostic-archive-card,
+.technical-memory-card,
 .plate-preview-card,
 .identification-card,
 .mini-stat,
@@ -1867,7 +1923,9 @@ label {
 
 @media (max-width: 860px) {
   .dashboard-latest-grid,
-  .about-card {
+  .about-card,
+  .memory-checkbox-grid,
+  .memory-radio-row {
     grid-template-columns: 1fr;
   }
 

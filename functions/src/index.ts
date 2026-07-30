@@ -7,7 +7,15 @@ import OpenAI from "openai";
 import { createHash } from "node:crypto";
 import { DIAGNOSTIC_MODEL, DIAGNOSTIC_PROMPT_VERSION, buildDiagnosticPrompt } from "./prompt.js";
 import { buildArchiveTitle } from "./result.js";
-import type { DiagnosticAIResult, DiagnosticPhotoRecord, DiagnosticRecord, OpenAIDiagnosticPayload, UserProfileRecord } from "./types.js";
+import type {
+  DiagnosticAIResult,
+  DiagnosticPhotoRecord,
+  DiagnosticRecord,
+  OpenAIDiagnosticPayload,
+  TechnicalMemoryFeedbackRecord,
+  TechnicalMemoryInsight,
+  UserProfileRecord
+} from "./types.js";
 import { isPreferredLanguage, removeUndefinedFields, validateDiagnosticAIResult, validateOpenAIDiagnosticPayload } from "./validation.js";
 
 initializeApp();
@@ -194,6 +202,7 @@ export const analyzeDiagnostic = onCall(
         sourceReferences: result.sourceReferences || []
       };
       const validated = validateDiagnosticAIResult(finalResult);
+      const technicalMemoryInsight = await buildTechnicalMemoryInsight(diagnostic, validated);
       const title = buildArchiveTitle(validated);
 
       await diagnosticRef.set(
@@ -215,6 +224,7 @@ export const analyzeDiagnostic = onCall(
           sourceReferences: validated.sourceReferences,
           documentIds: validated.sourceReferences.map((source) => source.documentId).filter(Boolean),
           analysisResult: validated,
+          technicalMemoryInsight,
           analysisSummary: validated.faultDescription || undefined,
           analysisCompletedAt: validated.analyzedAt,
           analyzedPhotoSignature: photoSignature,
@@ -244,7 +254,8 @@ export const analyzeDiagnostic = onCall(
           detectedErrorCode: validated.detectedErrorCode,
           shortFaultDescription: validated.faultDescription,
           sourceReferences: validated.sourceReferences,
-          confidenceLevel: validated.confidenceLevel
+          confidenceLevel: validated.confidenceLevel,
+          technicalMemoryInsight
         }
       };
     } catch (error) {
@@ -269,6 +280,111 @@ function readDiagnosticId(data: unknown): string {
   }
   if (data.diagnosticId.length > 120) throw new HttpsError("invalid-argument", "diagnosticId invalide.");
   return data.diagnosticId;
+}
+
+async function buildTechnicalMemoryInsight(diagnostic: DiagnosticRecord, result: DiagnosticAIResult): Promise<TechnicalMemoryInsight> {
+  const snapshot = await db.collection("technicalMemoryFeedbacks").where("companyId", "==", diagnostic.companyId).limit(500).get();
+  const feedbacks = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }) as TechnicalMemoryFeedbackRecord);
+  const similar = feedbacks.filter((feedback) => isSimilarMemoryCase(feedback, diagnostic, result));
+  const repairedCount = similar.filter((feedback) => feedback.repairResult === "repare").length;
+  const partiallyRepairedCount = similar.filter((feedback) => feedback.repairResult === "repare_partiellement").length;
+  const unrepairedCount = similar.filter((feedback) => feedback.repairResult === "non_repare").length;
+  const durations = similar.map((feedback) => feedback.timeSpentMinutes).filter((value) => Number.isFinite(value) && value > 0);
+  const causeStats = countBy(similar, "actualCause", causeLabel, "cause");
+  const actionStats = countActions(similar);
+  return {
+    totalKnownCases: similar.length,
+    repairedCount,
+    partiallyRepairedCount,
+    unrepairedCount,
+    successRate: similar.length ? Math.round(((repairedCount + partiallyRepairedCount) / similar.length) * 100) : 0,
+    averageRepairTimeMinutes: durations.length ? Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length) : null,
+    mostFrequentCause: causeStats[0] || null,
+    causeStats,
+    actionStats
+  };
+}
+
+function isSimilarMemoryCase(feedback: TechnicalMemoryFeedbackRecord, diagnostic: DiagnosticRecord, result: DiagnosticAIResult): boolean {
+  if (feedback.diagnosticId === diagnostic.id) return false;
+  const score = [
+    sameNormalized(feedback.detectedBrand, result.detectedBrand),
+    sameNormalized(feedback.detectedModel, result.detectedModel),
+    sameNormalized(feedback.detectedEquipmentType, result.detectedEquipmentType),
+    sameNormalized(feedback.detectedErrorCode, result.detectedErrorCode),
+    intersects(feedback.aiProbableCauses || [], result.probableCauses)
+  ].filter(Boolean).length;
+  return score >= 2 || Boolean(result.detectedErrorCode && sameNormalized(feedback.detectedErrorCode, result.detectedErrorCode));
+}
+
+function sameNormalized(left?: string | null, right?: string | null): boolean {
+  return Boolean(left && right && normalize(left) === normalize(right));
+}
+
+function intersects(left: string[], right: string[]): boolean {
+  const normalizedRight = new Set(right.map(normalize).filter(Boolean));
+  return left.map(normalize).some((item) => normalizedRight.has(item));
+}
+
+function normalize(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function countBy<TField extends "actualCause">(
+  feedbacks: TechnicalMemoryFeedbackRecord[],
+  field: TField,
+  labeler: (value: string) => string,
+  keyName: "cause"
+): Array<{ cause: string; label: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const feedback of feedbacks) counts.set(String(feedback[field]), (counts.get(String(feedback[field])) || 0) + 1);
+  return Array.from(counts.entries())
+    .map(([value, count]) => ({ [keyName]: value, label: labeler(value), count }) as { cause: string; label: string; count: number })
+    .sort(sortByCountAndLabel);
+}
+
+function countActions(feedbacks: TechnicalMemoryFeedbackRecord[]): Array<{ action: string; label: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const feedback of feedbacks) {
+    for (const action of feedback.actions || []) counts.set(action, (counts.get(action) || 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .map(([action, count]) => ({ action, label: actionLabel(action), count }))
+    .sort(sortByCountAndLabel);
+}
+
+function sortByCountAndLabel<T extends { count: number; label: string }>(left: T, right: T): number {
+  return right.count - left.count || left.label.localeCompare(right.label);
+}
+
+function causeLabel(value: string): string {
+  const labels: Record<string, string> = {
+    sonde_defectueuse: "Sonde defectueuse",
+    carte_electronique_hs: "Carte electronique HS",
+    ventilateur_bloque: "Ventilateur bloque",
+    manque_de_fluide: "Manque de fluide",
+    fuite_detectee: "Fuite detectee",
+    connecteur_desserre: "Connecteur desserre",
+    mauvais_cablage: "Mauvais cablage",
+    parametrage: "Parametrage",
+    autre: "Autre"
+  };
+  return labels[value] || value;
+}
+
+function actionLabel(value: string): string {
+  const labels: Record<string, string> = {
+    remplacement_sonde: "Remplacement sonde",
+    remplacement_carte: "Remplacement carte",
+    ajout_fluide: "Ajout de fluide",
+    recherche_fuite: "Recherche de fuite",
+    remplacement_ventilateur: "Remplacement ventilateur",
+    nettoyage: "Nettoyage",
+    resserrage_connecteur: "Resserrage connecteur",
+    reparametrage: "Reparametrage",
+    autre: "Autre"
+  };
+  return labels[value] || value;
 }
 
 async function readActiveUser(uid: string): Promise<UserProfileRecord> {

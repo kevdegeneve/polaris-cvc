@@ -7,6 +7,7 @@ import {
   DiagnosticPhoto,
   DocumentImportCandidate,
   InterventionDraft,
+  TechnicalMemoryFeedback,
   TechnicalDocument
 } from "../domain/types";
 import { FirestoreRepository } from "./firestoreRepository";
@@ -28,6 +29,7 @@ export interface AppRepository {
   recordDocumentView(data: AppData, documentId: string, userId: string): Promise<AppData>;
   updateUserLanguage(data: AppData, userId: string, language: AppUser["preferredLanguage"], label: string): Promise<AppData>;
   saveDiagnostic(data: AppData, diagnostic: Diagnostic, photos: DiagnosticPhoto[], messages: DiagnosticMessage[]): Promise<AppData>;
+  saveTechnicalMemoryFeedback(data: AppData, feedback: TechnicalMemoryFeedback): Promise<AppData>;
 }
 
 export function createAppRepository(userId?: string): AppRepository {

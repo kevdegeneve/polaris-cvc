@@ -12,6 +12,7 @@ import {
   Intervention,
   InterventionDraft,
   MediaItem,
+  TechnicalMemoryFeedback,
   TechnicalDocument
 } from "../domain/types";
 import { buildDocumentSearchIndex } from "./documentLibraryService";
@@ -48,6 +49,7 @@ export function createEmptyData(companyId = LOCAL_COMPANY_ID, companyName = "Pol
     diagnosticPhotos: [],
     diagnosticMessages: [],
     diagnosticDocumentLinks: [],
+    technicalMemoryFeedbacks: [],
     interventions: [],
     measurements: [],
     media: [],
@@ -275,6 +277,18 @@ export class LocalRepository implements AppRepository {
     this.save(next);
     return next;
   }
+
+  async saveTechnicalMemoryFeedback(data: AppData, feedback: TechnicalMemoryFeedback): Promise<AppData> {
+    const next = {
+      ...data,
+      technicalMemoryFeedbacks: [
+        feedback,
+        ...data.technicalMemoryFeedbacks.filter((item) => item.diagnosticId !== feedback.diagnosticId)
+      ]
+    };
+    this.save(next);
+    return next;
+  }
 }
 
 export const repository = new LocalRepository();
@@ -307,7 +321,8 @@ function migrateAppData(data: AppData): AppData {
     diagnostics: withoutLegacyDemo.diagnostics || [],
     diagnosticPhotos: withoutLegacyDemo.diagnosticPhotos || [],
     diagnosticMessages: withoutLegacyDemo.diagnosticMessages || [],
-    diagnosticDocumentLinks: withoutLegacyDemo.diagnosticDocumentLinks || []
+    diagnosticDocumentLinks: withoutLegacyDemo.diagnosticDocumentLinks || [],
+    technicalMemoryFeedbacks: withoutLegacyDemo.technicalMemoryFeedbacks || []
   };
 }
 

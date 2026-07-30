@@ -38,6 +38,27 @@ export type DiagnosticPhotoCategory =
   | "autre";
 export type DiagnosticMessageRole = "system" | "assistant" | "technician" | "source" | "observation" | "measurement";
 export type TechnicalDocumentStatus = "active" | "deprecated" | "superseded" | "hidden";
+export type TechnicalMemoryCause =
+  | "sonde_defectueuse"
+  | "carte_electronique_hs"
+  | "ventilateur_bloque"
+  | "manque_de_fluide"
+  | "fuite_detectee"
+  | "connecteur_desserre"
+  | "mauvais_cablage"
+  | "parametrage"
+  | "autre";
+export type TechnicalMemoryAction =
+  | "remplacement_sonde"
+  | "remplacement_carte"
+  | "ajout_fluide"
+  | "recherche_fuite"
+  | "remplacement_ventilateur"
+  | "nettoyage"
+  | "resserrage_connecteur"
+  | "reparametrage"
+  | "autre";
+export type TechnicalMemoryRepairResult = "repare" | "repare_partiellement" | "non_repare";
 export type DocumentTranslationStatus =
   | "original_available"
   | "translation_pending"
@@ -332,6 +353,7 @@ export interface Diagnostic extends CompanyScoped {
   sourceReferences: SourceReference[];
   analysisSummary?: string;
   analysisResult?: DiagnosticAIResult;
+  technicalMemoryInsight?: TechnicalMemoryInsight;
   finalDiagnosis?: string;
   probableCauses: string[];
   performedChecks: string[];
@@ -395,6 +417,61 @@ export interface DiagnosticDocumentLink extends CompanyScoped {
   responseMessageId?: string;
 }
 
+export interface TechnicalMemorySourceLink {
+  type: "documentation_constructeur" | "note_interne" | "procedure" | "pdf" | "bulletin_technique";
+  id?: string;
+  title?: string;
+  reference?: string;
+  url?: string;
+  status: "prevu" | "lie" | "a_verifier";
+}
+
+export interface TechnicalMemoryFeedback extends CompanyScoped {
+  diagnosticId: string;
+  technicianId: string;
+  technicianName: string;
+  detectedBrand?: string;
+  detectedModel?: string;
+  detectedEquipmentType?: string;
+  detectedErrorCode?: string;
+  symptomSummary?: string;
+  aiProbableCauses: string[];
+  actualCause: TechnicalMemoryCause;
+  actualCauseOther?: string;
+  actions: TechnicalMemoryAction[];
+  actionOther?: string;
+  repairResult: TechnicalMemoryRepairResult;
+  timeSpentMinutes: number;
+  comment?: string;
+  sourceLinks: TechnicalMemorySourceLink[];
+  createdBy: string;
+  updatedBy: string;
+}
+
+export interface TechnicalMemoryCauseStat {
+  cause: TechnicalMemoryCause;
+  label: string;
+  count: number;
+}
+
+export interface TechnicalMemoryActionStat {
+  action: TechnicalMemoryAction;
+  label: string;
+  count: number;
+}
+
+export interface TechnicalMemoryInsight {
+  totalKnownCases: number;
+  repairedCount: number;
+  partiallyRepairedCount: number;
+  unrepairedCount: number;
+  successRate: number;
+  averageRepairTimeMinutes: number | null;
+  mostFrequentCause: TechnicalMemoryCauseStat | null;
+  causeStats: TechnicalMemoryCauseStat[];
+  actionStats: TechnicalMemoryActionStat[];
+}
+
 export interface DiagnosticAnalysis {
   result: DiagnosticAIResult;
   detectedBrand?: string | null;
@@ -403,6 +480,7 @@ export interface DiagnosticAnalysis {
   shortFaultDescription?: string | null;
   sourceReferences: SourceReference[];
   confidenceLevel?: number;
+  technicalMemoryInsight?: TechnicalMemoryInsight;
 }
 
 export interface AIAnalysisRequest {
@@ -490,6 +568,7 @@ export interface AppData {
   diagnosticPhotos: DiagnosticPhoto[];
   diagnosticMessages: DiagnosticMessage[];
   diagnosticDocumentLinks: DiagnosticDocumentLink[];
+  technicalMemoryFeedbacks: TechnicalMemoryFeedback[];
   interventions: Intervention[];
   measurements: Measurement[];
   media: MediaItem[];

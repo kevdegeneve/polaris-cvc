@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Archive, Camera, CheckCircle2, FileText, ImagePlus, Plus, Trash2 } from "lucide-react";
+import { Archive, BrainCircuit, Camera, CheckCircle2, FileText, ImagePlus, Plus, Trash2 } from "lucide-react";
 import type {
   AppData,
   AppUser,
@@ -9,6 +9,9 @@ import type {
   DiagnosticPhoto,
   DiagnosticPhotoCategory,
   DiagnosticStatus,
+  TechnicalMemoryAction,
+  TechnicalMemoryFeedback,
+  TechnicalMemoryRepairResult,
   UserPreferredLanguage
 } from "../domain/types";
 import { diagnosticAIService } from "../services/diagnosticAIService";
@@ -22,6 +25,15 @@ import {
 } from "../services/diagnosticService";
 import { uploadDiagnosticPhoto, validateDiagnosticImage, type DiagnosticUploadProgress } from "../services/diagnosticUploadService";
 import { getLanguageLabel, languageOptions, translate, type TranslationKey } from "../services/languageService";
+import {
+  buildTechnicalMemoryInsight,
+  createTechnicalMemoryFeedback,
+  technicalMemoryActionOptions,
+  technicalMemoryCauseOptions,
+  technicalMemoryResultOptions,
+  validateTechnicalMemoryFeedbackInput,
+  type TechnicalMemoryFeedbackInput
+} from "../services/technicalMemoryService";
 import { BrandLogo } from "./brand";
 
 interface LocalDiagnosticPhoto {
@@ -101,11 +113,13 @@ export function LanguageSelectionScreen({
 export function DiagnosticStartView({
   data,
   user,
-  onSave
+  onSave,
+  onSaveTechnicalMemory
 }: {
   data: AppData;
   user: AppUser;
   onSave: (diagnostic: Diagnostic, photos: DiagnosticPhoto[], messages: DiagnosticMessage[]) => Promise<void>;
+  onSaveTechnicalMemory: (feedback: TechnicalMemoryFeedback) => Promise<void>;
 }) {
   const [photos, setPhotos] = useState<LocalDiagnosticPhoto[]>([]);
   const [isAnalyzing, setAnalyzing] = useState(false);
@@ -114,6 +128,13 @@ export function DiagnosticStartView({
   const [preparedDiagnostic, setPreparedDiagnostic] = useState<Diagnostic | null>(null);
   const [preparedPhotos, setPreparedPhotos] = useState<DiagnosticPhoto[]>([]);
   const [analysisResult, setAnalysisResult] = useState<DiagnosticAIResult | null>(null);
+  const [memoryInput, setMemoryInput] = useState<TechnicalMemoryFeedbackInput>({
+    actualCause: "sonde_defectueuse",
+    actions: [],
+    repairResult: "repare",
+    timeSpentMinutes: 0
+  });
+  const [memoryErrors, setMemoryErrors] = useState<string[]>([]);
   const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
   const [workflowStatus, setWorkflowStatus] = useState<DiagnosticStatus | null>(null);
   const status = workflowStatus || getDiagnosticStatus(photos, isAnalyzing);
@@ -243,6 +264,7 @@ export function DiagnosticStartView({
         documentIds: result.sourceReferences.map((source) => source.documentId).filter((id): id is string => Boolean(id)),
         sourceReferences: result.sourceReferences,
         analysisResult: result,
+        technicalMemoryInsight: aiResponse.analysis.technicalMemoryInsight,
         analysisSummary: result.faultDescription || undefined,
         probableCauses: result.probableCauses,
         recommendedChecks: result.recommendedChecks,
@@ -288,7 +310,17 @@ export function DiagnosticStartView({
 
   async function finishDiagnostic() {
     if (!preparedDiagnostic) return;
+    const validationErrors = validateTechnicalMemoryFeedbackInput(memoryInput);
+    setMemoryErrors(validationErrors);
+    if (validationErrors.length > 0) return;
     const timestamp = new Date().toISOString();
+    const technicalMemoryFeedback = createTechnicalMemoryFeedback({
+      diagnostic: preparedDiagnostic,
+      technicianId: user.id,
+      technicianName: user.displayName,
+      feedback: memoryInput
+    });
+    await onSaveTechnicalMemory(technicalMemoryFeedback);
     const archivedDiagnostic: Diagnostic = {
       ...preparedDiagnostic,
       title: createDiagnosticArchiveTitle({
@@ -305,6 +337,11 @@ export function DiagnosticStartView({
     };
     await onSave(archivedDiagnostic, preparedPhotos, conversation);
   }
+
+  const memoryInsight = preparedDiagnostic?.technicalMemoryInsight
+    || (preparedDiagnostic
+    ? buildTechnicalMemoryInsight({ diagnostic: preparedDiagnostic, feedbacks: data.technicalMemoryFeedbacks })
+    : null);
 
   return (
     <section className="diagnostic-page">
@@ -351,6 +388,14 @@ export function DiagnosticStartView({
       {!isAnalyzing && analysisResult && <DiagnosticAIAnimation state="completed" />}
       {Object.keys(uploadProgress).length > 0 && <DiagnosticUploadProgress progress={uploadProgress} />}
       {analysisResult && <DiagnosticResultView result={analysisResult} />}
+      {memoryInsight && <TechnicalMemoryInsightView insight={memoryInsight} />}
+      {analysisResult && (
+        <TechnicalMemoryFeedbackForm
+          value={memoryInput}
+          errors={memoryErrors}
+          onChange={setMemoryInput}
+        />
+      )}
       {conversation.length > 0 && (
         <>
           <DiagnosticConversation messages={conversation} />
@@ -360,6 +405,131 @@ export function DiagnosticStartView({
         </>
       )}
     </section>
+  );
+}
+
+function TechnicalMemoryInsightView({ insight }: { insight: NonNullable<ReturnType<typeof buildTechnicalMemoryInsight>> }) {
+  return (
+    <section className="technical-memory-card">
+      <div className="section-title">
+        <BrainCircuit size={20} />
+        <strong>Retour d'experience Polaris</strong>
+      </div>
+      {insight.totalKnownCases === 0 ? (
+        <p className="muted">Aucun cas similaire connu pour le moment.</p>
+      ) : (
+        <>
+          <p>Sur {insight.totalKnownCases} diagnostic(s) similaire(s), Polaris a retrouve ces retours terrain.</p>
+          <div className="detail-grid">
+            <DetailLine label="Cause la plus frequente" value={insight.mostFrequentCause?.label || "Non renseignee"} />
+            <DetailLine label="Temps moyen" value={insight.averageRepairTimeMinutes ? `${insight.averageRepairTimeMinutes} min` : "Non renseigne"} />
+            <DetailLine label="Taux de reussite" value={`${insight.successRate}%`} />
+            <DetailLine label="Cas connus" value={String(insight.totalKnownCases)} />
+          </div>
+          {insight.causeStats.length > 0 && (
+            <div className="memory-stat-list">
+              {insight.causeStats.slice(0, 4).map((item) => (
+                <span key={item.cause}>{item.count} - {item.label}</span>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+function TechnicalMemoryFeedbackForm({
+  value,
+  errors,
+  onChange
+}: {
+  value: TechnicalMemoryFeedbackInput;
+  errors: string[];
+  onChange: (value: TechnicalMemoryFeedbackInput) => void;
+}) {
+  function toggleAction(action: TechnicalMemoryAction) {
+    const actions = value.actions.includes(action)
+      ? value.actions.filter((item) => item !== action)
+      : [...value.actions, action];
+    onChange({ ...value, actions });
+  }
+
+  return (
+    <section className="technical-memory-card">
+      <div className="section-title">
+        <BrainCircuit size={20} />
+        <strong>Memoire Technique Polaris</strong>
+      </div>
+      <label>
+        Cause reellement trouvee
+        <select value={value.actualCause} onChange={(event) => onChange({ ...value, actualCause: event.target.value as TechnicalMemoryFeedbackInput["actualCause"] })}>
+          {technicalMemoryCauseOptions.map((option) => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </select>
+      </label>
+      {value.actualCause === "autre" && (
+        <label>
+          Cause libre
+          <input value={value.actualCauseOther || ""} onChange={(event) => onChange({ ...value, actualCauseOther: event.target.value })} />
+        </label>
+      )}
+      <div className="memory-checkbox-grid">
+        {technicalMemoryActionOptions.map((option) => (
+          <label className="memory-checkbox" key={option.value}>
+            <input type="checkbox" checked={value.actions.includes(option.value)} onChange={() => toggleAction(option.value)} />
+            {option.label}
+          </label>
+        ))}
+      </div>
+      {value.actions.includes("autre") && (
+        <label>
+          Action libre
+          <input value={value.actionOther || ""} onChange={(event) => onChange({ ...value, actionOther: event.target.value })} />
+        </label>
+      )}
+      <div className="memory-radio-row">
+        {technicalMemoryResultOptions.map((option) => (
+          <label className="memory-radio" key={option.value}>
+            <input
+              type="radio"
+              name="repair-result"
+              checked={value.repairResult === option.value}
+              onChange={() => onChange({ ...value, repairResult: option.value as TechnicalMemoryRepairResult })}
+            />
+            {option.label}
+          </label>
+        ))}
+      </div>
+      <label>
+        Temps passe (minutes)
+        <input
+          type="number"
+          min="1"
+          value={value.timeSpentMinutes || ""}
+          onChange={(event) => onChange({ ...value, timeSpentMinutes: Number(event.target.value) })}
+        />
+      </label>
+      <label>
+        Commentaire libre
+        <textarea value={value.comment || ""} onChange={(event) => onChange({ ...value, comment: event.target.value })} rows={3} />
+      </label>
+      {errors.length > 0 && (
+        <div className="error-box">
+          {errors.map((item) => <p key={item}>{item}</p>)}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function DetailLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="detail">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
   );
 }
 

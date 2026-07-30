@@ -37,11 +37,12 @@ import {
   ProductFamily,
   TechnicalDocument,
   TechnicalDocumentType,
-  DocumentLanguage
+  DocumentLanguage,
+  TechnicalMemoryFeedback
 } from "../domain/types";
 import { makeSearchIndex, validateInterventionDraft } from "../domain/validation";
-import { AppShell, Dashboard, ModulePlaceholder, UserAvatar } from "./dashboard";
-import { ensureVisibleUsers, isAdminRole, type DashboardView } from "./dashboardModel";
+import { AppShell, UserAvatar } from "./dashboard";
+import type { DashboardView } from "./dashboardModel";
 import { DiagnosticArchivesView, DiagnosticStartView, LanguageSelectionScreen } from "./diagnostics";
 import {
   buildDocumentSearchIndex,
@@ -80,6 +81,25 @@ type View =
   | "profile"
 ;
 
+const defaultView: DashboardView = "diagnosticNew";
+
+function viewFromPath(pathname: string): DashboardView {
+  if (pathname === "/documents") return "documents";
+  if (pathname === "/archives") return "diagnostics";
+  if (pathname === "/settings") return "company";
+  return "diagnosticNew";
+}
+
+function pathForView(view: DashboardView): string {
+  const paths: Record<DashboardView, string> = {
+    diagnosticNew: "/diagnostics/new",
+    documents: "/documents",
+    diagnostics: "/archives",
+    company: "/settings"
+  };
+  return paths[view];
+}
+
 const emptyDraft: InterventionDraft = {
   customerId: "",
   siteId: "",
@@ -107,7 +127,7 @@ export function App() {
   const [languageError, setLanguageError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isAuthReady, setIsAuthReady] = useState(false);
-  const [view, setView] = useState<View>("home");
+  const [view, setView] = useState<View>(() => viewFromPath(window.location.pathname));
   const [data, setData] = useState(() => createEmptyData());
   const [selectedInterventionId, setSelectedInterventionId] = useState(data.interventions[0]?.id ?? "");
   const [draft, setDraft] = useState<InterventionDraft>(emptyDraft);
@@ -168,6 +188,25 @@ export function App() {
     setSelectedInterventionId(interventionId);
     setView("detail");
   }
+
+  function navigateTo(nextView: DashboardView, mode: "push" | "replace" = "push") {
+    setView(nextView);
+    const nextPath = pathForView(nextView);
+    if (window.location.pathname !== nextPath) {
+      window.history[mode === "replace" ? "replaceState" : "pushState"]({}, "", nextPath);
+    }
+  }
+
+  useEffect(() => {
+    if (window.location.pathname === "/") {
+      navigateTo(defaultView, "replace");
+    }
+    function handlePopState() {
+      setView(viewFromPath(window.location.pathname));
+    }
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
 
   useEffect(() => {
     const unsubscribe = getFirebaseAuthState((user) => {
@@ -337,7 +376,7 @@ export function App() {
             }
           : current
       );
-      setView("home");
+      navigateTo(defaultView, "replace");
     } catch (error) {
       const message = error instanceof Error ? error.message : "La langue n'a pas pu etre enregistree.";
       console.error(message, error);
@@ -351,11 +390,15 @@ export function App() {
     setData(await appRepository.saveDiagnostic(data, diagnostic, photos, messages));
   }
 
+  async function saveTechnicalMemoryFeedback(feedback: TechnicalMemoryFeedback) {
+    setData(await appRepository.saveTechnicalMemoryFeedback(data, feedback));
+  }
+
   async function handleSignOut() {
     await signOutCurrentSession();
     setSession(null);
     setAccessDenied(null);
-    setView("home");
+    navigateTo(defaultView, "replace");
     setStatusMessage("");
   }
 
@@ -432,15 +475,11 @@ export function App() {
       user={currentUser}
       activeView={view}
       title={titleForView(view, t)}
-      onNavigate={(nextView) => setView(nextView)}
+      onNavigate={(nextView) => navigateTo(nextView)}
       onSignOut={handleSignOut}
     >
-        {view === "home" && (
-          <Dashboard data={data} user={currentUser} onNavigate={(nextView) => setView(nextView)} />
-        )}
-
         {view === "diagnosticNew" && (
-          <DiagnosticStartView data={data} user={currentUser} onSave={saveDiagnostic} />
+          <DiagnosticStartView data={data} user={currentUser} onSave={saveDiagnostic} onSaveTechnicalMemory={saveTechnicalMemoryFeedback} />
         )}
 
         {view === "diagnostics" && (
@@ -526,10 +565,6 @@ export function App() {
           />
         )}
 
-        {view === "identifyEquipment" && (
-          <EquipmentIdentificationView companyId={data.company.id} userId={currentUser.id} />
-        )}
-
         {view === "documents" && (
           <TechnicalLibraryView
             data={data}
@@ -549,22 +584,6 @@ export function App() {
           />
         )}
 
-        {view === "team" && (
-          isAdminRole(currentUser.role) ? (
-            <SimpleList
-              emptyTitle={t("noAdditionalUser")}
-              emptyDescription={t("realDataWillAppear")}
-              items={ensureVisibleUsers(data.users, currentUser).map((item) => ({
-                id: item.id,
-                title: item.displayName,
-                subtitle: `${roleLabel(item.role)} - ${item.email}`
-              }))}
-            />
-          ) : (
-            <ModulePlaceholder title="Utilisateurs" description="Ce module est reserve aux administrateurs Polaris." />
-          )
-        )}
-
         {view === "profile" && (
           <section className="stack">
             <article className="profile-card">
@@ -575,9 +594,9 @@ export function App() {
                 <span className="status-pill">{roleLabel(currentUser.role)}</span>
               </div>
             </article>
-            <InfoCard title="Stockage" subtitle={appRepository.mode === "firestore" ? "Firestore actif" : "Mode local"} icon={<ShieldCheck />} />
+            <InfoCard title={t("storage")} subtitle={appRepository.mode === "firestore" ? t("firestoreActive") : t("localMode")} icon={<ShieldCheck />} />
             <button className="secondary" onClick={handleSignOut}>
-              <LogOut size={20} /> Deconnexion
+              <LogOut size={20} /> {t("signOut")}
             </button>
           </section>
         )}
@@ -585,53 +604,18 @@ export function App() {
         {view === "company" && (
           <section className="stack">
             <InfoCard title={data.company.name} subtitle={t("settings")} icon={<Building2 />} />
-            <InfoCard title="IA" subtitle="Service abstrait cree. Fournisseur non active dans cette version." icon={<ShieldCheck />} />
+            <InfoCard title={t("ai")} subtitle={t("aiSettingsText")} icon={<ShieldCheck />} />
             <article className="about-card">
               <BrandLogo variant="lockup" />
               <div>
-                <p className="eyebrow">A propos</p>
+                <p className="eyebrow">{t("about")}</p>
                 <h2>Polaris CVC</h2>
-                <p className="muted">Logiciel professionnel de diagnostic, intervention et documentation CVC.</p>
+                <p className="muted">{t("aboutText")}</p>
               </div>
             </article>
           </section>
         )}
     </AppShell>
-  );
-}
-
-function HomeView({
-  activeCount,
-  onNavigate,
-  onSearch
-}: {
-  activeCount: number;
-  onNavigate: (view: View) => void;
-  onSearch: () => void;
-}) {
-  const actions = [
-    { label: "Nouvelle intervention", icon: <Plus />, view: "new" as View, primary: true },
-    { label: `En cours (${activeCount})`, icon: <ClipboardList />, view: "active" as View },
-    { label: "Rechercher une panne", icon: <Search />, action: onSearch },
-    { label: "Documentation", icon: <BookOpen />, view: "documents" as View },
-    { label: "Identifier", icon: <ScanLine />, view: "identifyEquipment" as View },
-    { label: "Equipements", icon: <Wrench />, view: "equipment" as View },
-    { label: "Equipe", icon: <Users />, view: "team" as View }
-  ];
-
-  return (
-    <section className="quick-grid">
-      {actions.map((action) => (
-        <button
-          key={action.label}
-          className={action.primary ? "quick-card primary-card" : "quick-card"}
-          onClick={() => (action.action ? action.action() : onNavigate(action.view))}
-        >
-          {action.icon}
-          <span>{action.label}</span>
-        </button>
-      ))}
-    </section>
   );
 }
 
@@ -1341,8 +1325,8 @@ function ReportSections({ intervention }: { intervention: AppData["interventions
 
 function titleForView(view: View, t: (key: TranslationKey) => string): string {
   const titles: Record<View, string> = {
-    home: t("dashboard"),
     diagnosticNew: t("diagnostic"),
+    documents: t("documents"),
     diagnostics: t("diagnosticsArchive"),
     new: t("interventionNew"),
     active: t("interventionCurrent"),
@@ -1351,11 +1335,8 @@ function titleForView(view: View, t: (key: TranslationKey) => string): string {
     customers: "Clients",
     sites: "Sites",
     equipment: t("identifiedEquipment"),
-    identifyEquipment: t("identifyEquipment"),
-    documents: t("documents"),
-    team: t("users"),
     profile: t("profile"),
-    company: t("company")
+    company: t("settings")
   };
   return titles[view];
 }

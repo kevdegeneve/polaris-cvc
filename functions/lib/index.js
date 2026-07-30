@@ -187,6 +187,7 @@ export const analyzeDiagnostic = onCall({
             sourceReferences: result.sourceReferences || []
         };
         const validated = validateDiagnosticAIResult(finalResult);
+        const technicalMemoryInsight = await buildTechnicalMemoryInsight(diagnostic, validated);
         const title = buildArchiveTitle(validated);
         await diagnosticRef.set(removeUndefinedFields({
             title,
@@ -206,6 +207,7 @@ export const analyzeDiagnostic = onCall({
             sourceReferences: validated.sourceReferences,
             documentIds: validated.sourceReferences.map((source) => source.documentId).filter(Boolean),
             analysisResult: validated,
+            technicalMemoryInsight,
             analysisSummary: validated.faultDescription || undefined,
             analysisCompletedAt: validated.analyzedAt,
             analyzedPhotoSignature: photoSignature,
@@ -230,7 +232,8 @@ export const analyzeDiagnostic = onCall({
                 detectedErrorCode: validated.detectedErrorCode,
                 shortFaultDescription: validated.faultDescription,
                 sourceReferences: validated.sourceReferences,
-                confidenceLevel: validated.confidenceLevel
+                confidenceLevel: validated.confidenceLevel,
+                technicalMemoryInsight
             }
         };
     }
@@ -253,6 +256,99 @@ function readDiagnosticId(data) {
     if (data.diagnosticId.length > 120)
         throw new HttpsError("invalid-argument", "diagnosticId invalide.");
     return data.diagnosticId;
+}
+async function buildTechnicalMemoryInsight(diagnostic, result) {
+    const snapshot = await db.collection("technicalMemoryFeedbacks").where("companyId", "==", diagnostic.companyId).limit(500).get();
+    const feedbacks = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    const similar = feedbacks.filter((feedback) => isSimilarMemoryCase(feedback, diagnostic, result));
+    const repairedCount = similar.filter((feedback) => feedback.repairResult === "repare").length;
+    const partiallyRepairedCount = similar.filter((feedback) => feedback.repairResult === "repare_partiellement").length;
+    const unrepairedCount = similar.filter((feedback) => feedback.repairResult === "non_repare").length;
+    const durations = similar.map((feedback) => feedback.timeSpentMinutes).filter((value) => Number.isFinite(value) && value > 0);
+    const causeStats = countBy(similar, "actualCause", causeLabel, "cause");
+    const actionStats = countActions(similar);
+    return {
+        totalKnownCases: similar.length,
+        repairedCount,
+        partiallyRepairedCount,
+        unrepairedCount,
+        successRate: similar.length ? Math.round(((repairedCount + partiallyRepairedCount) / similar.length) * 100) : 0,
+        averageRepairTimeMinutes: durations.length ? Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length) : null,
+        mostFrequentCause: causeStats[0] || null,
+        causeStats,
+        actionStats
+    };
+}
+function isSimilarMemoryCase(feedback, diagnostic, result) {
+    if (feedback.diagnosticId === diagnostic.id)
+        return false;
+    const score = [
+        sameNormalized(feedback.detectedBrand, result.detectedBrand),
+        sameNormalized(feedback.detectedModel, result.detectedModel),
+        sameNormalized(feedback.detectedEquipmentType, result.detectedEquipmentType),
+        sameNormalized(feedback.detectedErrorCode, result.detectedErrorCode),
+        intersects(feedback.aiProbableCauses || [], result.probableCauses)
+    ].filter(Boolean).length;
+    return score >= 2 || Boolean(result.detectedErrorCode && sameNormalized(feedback.detectedErrorCode, result.detectedErrorCode));
+}
+function sameNormalized(left, right) {
+    return Boolean(left && right && normalize(left) === normalize(right));
+}
+function intersects(left, right) {
+    const normalizedRight = new Set(right.map(normalize).filter(Boolean));
+    return left.map(normalize).some((item) => normalizedRight.has(item));
+}
+function normalize(value) {
+    return value.trim().toLowerCase();
+}
+function countBy(feedbacks, field, labeler, keyName) {
+    const counts = new Map();
+    for (const feedback of feedbacks)
+        counts.set(String(feedback[field]), (counts.get(String(feedback[field])) || 0) + 1);
+    return Array.from(counts.entries())
+        .map(([value, count]) => ({ [keyName]: value, label: labeler(value), count }))
+        .sort(sortByCountAndLabel);
+}
+function countActions(feedbacks) {
+    const counts = new Map();
+    for (const feedback of feedbacks) {
+        for (const action of feedback.actions || [])
+            counts.set(action, (counts.get(action) || 0) + 1);
+    }
+    return Array.from(counts.entries())
+        .map(([action, count]) => ({ action, label: actionLabel(action), count }))
+        .sort(sortByCountAndLabel);
+}
+function sortByCountAndLabel(left, right) {
+    return right.count - left.count || left.label.localeCompare(right.label);
+}
+function causeLabel(value) {
+    const labels = {
+        sonde_defectueuse: "Sonde defectueuse",
+        carte_electronique_hs: "Carte electronique HS",
+        ventilateur_bloque: "Ventilateur bloque",
+        manque_de_fluide: "Manque de fluide",
+        fuite_detectee: "Fuite detectee",
+        connecteur_desserre: "Connecteur desserre",
+        mauvais_cablage: "Mauvais cablage",
+        parametrage: "Parametrage",
+        autre: "Autre"
+    };
+    return labels[value] || value;
+}
+function actionLabel(value) {
+    const labels = {
+        remplacement_sonde: "Remplacement sonde",
+        remplacement_carte: "Remplacement carte",
+        ajout_fluide: "Ajout de fluide",
+        recherche_fuite: "Recherche de fuite",
+        remplacement_ventilateur: "Remplacement ventilateur",
+        nettoyage: "Nettoyage",
+        resserrage_connecteur: "Resserrage connecteur",
+        reparametrage: "Reparametrage",
+        autre: "Autre"
+    };
+    return labels[value] || value;
 }
 async function readActiveUser(uid) {
     const snap = await db.collection("users").doc(uid).get();

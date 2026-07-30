@@ -2,14 +2,14 @@
   "name": "Polaris CVC",
   "short_name": "Polaris",
   "description": "Application mobile terrain pour interventions CVC.",
-  "start_url": "/",
+  "start_url": "/diagnostics/new",
   "display": "standalone",
   "background_color": "#0B1220",
   "theme_color": "#0B1220",
   "icons": [
     {
       "src": "/polaris-logo.png",
-      "sizes": "1254x1254",
+      "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
     },

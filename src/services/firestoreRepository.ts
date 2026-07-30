@@ -25,6 +25,7 @@ import {
   DocumentImportCandidate,
   Intervention,
   InterventionDraft,
+  TechnicalMemoryFeedback,
   TechnicalDocument
 } from "../domain/types";
 import type { AppRepository } from "./repository";
@@ -74,6 +75,7 @@ export class FirestoreRepository implements AppRepository {
     const diagnostics = await this.loadDiagnostics(user.companyId);
     const diagnosticPhotos = await this.loadDiagnosticPhotos(user.companyId);
     const diagnosticMessages = await this.loadDiagnosticMessages(user.companyId);
+    const technicalMemoryFeedbacks = await this.loadTechnicalMemoryFeedbacks(user.companyId);
     const localData = this.local.loadSync();
 
     return {
@@ -87,6 +89,7 @@ export class FirestoreRepository implements AppRepository {
       diagnosticPhotos,
       diagnosticMessages,
       diagnosticDocumentLinks: localData.diagnosticDocumentLinks.filter((item) => item.companyId === user.companyId),
+      technicalMemoryFeedbacks,
       documents: localData.documents.filter((item) => item.companyId === user.companyId),
       documentLinks: localData.documentLinks.filter((item) => item.companyId === user.companyId),
       documentFavorites: localData.documentFavorites.filter((item) => item.companyId === user.companyId),
@@ -214,6 +217,18 @@ export class FirestoreRepository implements AppRepository {
     };
   }
 
+  async saveTechnicalMemoryFeedback(data: AppData, feedback: TechnicalMemoryFeedback): Promise<AppData> {
+    await setDoc(doc(this.db, "technicalMemoryFeedbacks", feedback.id), removeUndefinedFields(feedback), { merge: true });
+
+    return {
+      ...data,
+      technicalMemoryFeedbacks: [
+        feedback,
+        ...data.technicalMemoryFeedbacks.filter((item) => item.diagnosticId !== feedback.diagnosticId)
+      ]
+    };
+  }
+
   async ensureUserProfile(user: AppUser, company: Company): Promise<void> {
     assertCompanyAccess(user.companyId, { companyId: company.id });
     await setDoc(doc(this.db, "companies", company.id), removeUndefinedFields(company), { merge: true });
@@ -247,5 +262,12 @@ export class FirestoreRepository implements AppRepository {
   private async loadDiagnosticMessages(companyId: string): Promise<DiagnosticMessage[]> {
     const snapshot = await getDocs(query(collection(this.db, "diagnosticMessages"), where("companyId", "==", companyId), limit(300)));
     return snapshot.docs.map((item) => fromFirestore<DiagnosticMessage>(item.id, item.data()));
+  }
+
+  private async loadTechnicalMemoryFeedbacks(companyId: string): Promise<TechnicalMemoryFeedback[]> {
+    const snapshot = await getDocs(
+      query(collection(this.db, "technicalMemoryFeedbacks"), where("companyId", "==", companyId), orderBy("createdAt", "desc"), limit(500))
+    );
+    return snapshot.docs.map((item) => fromFirestore<TechnicalMemoryFeedback>(item.id, item.data()));
   }
 }

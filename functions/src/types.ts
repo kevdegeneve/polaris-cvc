@@ -59,6 +59,34 @@ export interface DiagnosticAIResult {
 
 export type OpenAIDiagnosticPayload = Omit<DiagnosticAIResult, "analyzedAt" | "modelUsed" | "promptVersion">;
 
+export interface TechnicalMemoryFeedbackRecord {
+  id: string;
+  companyId: string;
+  diagnosticId: string;
+  detectedBrand?: string;
+  detectedModel?: string;
+  detectedEquipmentType?: string;
+  detectedErrorCode?: string;
+  symptomSummary?: string;
+  aiProbableCauses: string[];
+  actualCause: string;
+  actions: string[];
+  repairResult: "repare" | "repare_partiellement" | "non_repare";
+  timeSpentMinutes: number;
+}
+
+export interface TechnicalMemoryInsight {
+  totalKnownCases: number;
+  repairedCount: number;
+  partiallyRepairedCount: number;
+  unrepairedCount: number;
+  successRate: number;
+  averageRepairTimeMinutes: number | null;
+  mostFrequentCause: { cause: string; label: string; count: number } | null;
+  causeStats: Array<{ cause: string; label: string; count: number }>;
+  actionStats: Array<{ action: string; label: string; count: number }>;
+}
+
 export interface DiagnosticPhotoRecord {
   id: string;
   diagnosticId: string;
