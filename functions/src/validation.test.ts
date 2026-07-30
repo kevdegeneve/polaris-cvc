@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildArchiveTitle } from "./result.js";
-import { removeUndefinedFields, validateDiagnosticAIResult } from "./validation.js";
+import { removeUndefinedFields, validateDiagnosticAIResult, validateOpenAIDiagnosticPayload } from "./validation.js";
 
 const validResult = {
   detectedBrand: null,
@@ -30,6 +30,14 @@ describe("diagnostic analysis validation", () => {
     const result = validateDiagnosticAIResult(validResult);
 
     expect(result.detectedBrand).toBeNull();
+    expect(result.sourceReferences).toEqual([]);
+  });
+
+  it("accepts OpenAI technical payload before server metadata is added", () => {
+    const { analyzedAt: _analyzedAt, modelUsed: _modelUsed, promptVersion: _promptVersion, ...openAiPayload } = validResult;
+    const result = validateOpenAIDiagnosticPayload(openAiPayload);
+
+    expect(result.detectedErrorCode).toBe("E01");
     expect(result.sourceReferences).toEqual([]);
   });
 

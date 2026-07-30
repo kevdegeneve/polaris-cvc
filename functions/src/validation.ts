@@ -1,4 +1,4 @@
-import type { DiagnosticAIResult, DiagnosticCheck, ExpectedMeasurement, SourceReference, UserPreferredLanguage } from "./types.js";
+import type { DiagnosticAIResult, DiagnosticCheck, ExpectedMeasurement, OpenAIDiagnosticPayload, SourceReference, UserPreferredLanguage } from "./types.js";
 
 const languages: UserPreferredLanguage[] = ["fr", "en", "de", "it", "es"];
 
@@ -9,6 +9,17 @@ export function isPreferredLanguage(value: unknown): value is UserPreferredLangu
 export function validateDiagnosticAIResult(value: unknown): DiagnosticAIResult {
   if (!isRecord(value)) throw new Error("invalid_result_object");
   const result: DiagnosticAIResult = {
+    ...validateOpenAIDiagnosticPayload(value),
+    analyzedAt: requiredString(value.analyzedAt, "analyzedAt"),
+    modelUsed: requiredString(value.modelUsed, "modelUsed"),
+    promptVersion: requiredString(value.promptVersion, "promptVersion")
+  };
+  return result;
+}
+
+export function validateOpenAIDiagnosticPayload(value: unknown): OpenAIDiagnosticPayload {
+  if (!isRecord(value)) throw new Error("invalid_result_object");
+  const result: OpenAIDiagnosticPayload = {
     detectedBrand: nullableString(value.detectedBrand, "detectedBrand"),
     detectedModel: nullableString(value.detectedModel, "detectedModel"),
     detectedSerialNumber: nullableString(value.detectedSerialNumber, "detectedSerialNumber"),
@@ -25,10 +36,7 @@ export function validateDiagnosticAIResult(value: unknown): DiagnosticAIResult {
     missingInformation: stringArray(value.missingInformation, "missingInformation"),
     confidenceLevel: confidence(value.confidenceLevel),
     analysisLanguage: language(value.analysisLanguage),
-    sourceReferences: sourceArray(value.sourceReferences),
-    analyzedAt: requiredString(value.analyzedAt, "analyzedAt"),
-    modelUsed: requiredString(value.modelUsed, "modelUsed"),
-    promptVersion: requiredString(value.promptVersion, "promptVersion")
+    sourceReferences: sourceArray(value.sourceReferences)
   };
   return result;
 }

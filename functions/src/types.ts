@@ -57,6 +57,8 @@ export interface DiagnosticAIResult {
   promptVersion: string;
 }
 
+export type OpenAIDiagnosticPayload = Omit<DiagnosticAIResult, "analyzedAt" | "modelUsed" | "promptVersion">;
+
 export interface DiagnosticPhotoRecord {
   id: string;
   diagnosticId: string;

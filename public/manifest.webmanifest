@@ -4,9 +4,15 @@
   "description": "Application mobile terrain pour interventions CVC.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#f4f7f8",
-  "theme_color": "#09212b",
+  "background_color": "#0B1220",
+  "theme_color": "#0B1220",
   "icons": [
+    {
+      "src": "/polaris-logo.png",
+      "sizes": "1254x1254",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
     {
       "src": "/icon.svg",
       "sizes": "any",

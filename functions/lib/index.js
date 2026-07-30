@@ -7,12 +7,127 @@ import OpenAI from "openai";
 import { createHash } from "node:crypto";
 import { DIAGNOSTIC_MODEL, DIAGNOSTIC_PROMPT_VERSION, buildDiagnosticPrompt } from "./prompt.js";
 import { buildArchiveTitle } from "./result.js";
-import { isPreferredLanguage, removeUndefinedFields, validateDiagnosticAIResult } from "./validation.js";
+import { isPreferredLanguage, removeUndefinedFields, validateDiagnosticAIResult, validateOpenAIDiagnosticPayload } from "./validation.js";
 initializeApp();
 const openAiApiKey = defineSecret("OPENAI_API_KEY");
 const db = getFirestore();
 const allowedMimeTypes = ["image/jpeg", "image/png", "image/webp"];
 const maxImageSize = 10 * 1024 * 1024;
+const diagnosticResponseFormat = {
+    type: "json_schema",
+    json_schema: {
+        name: "polaris_diagnostic_analysis",
+        strict: true,
+        schema: {
+            type: "object",
+            additionalProperties: false,
+            required: [
+                "detectedBrand",
+                "detectedModel",
+                "detectedSerialNumber",
+                "detectedEquipmentType",
+                "detectedErrorCode",
+                "plateExtractedText",
+                "faultImageExtractedText",
+                "faultDescription",
+                "probableCauses",
+                "recommendedChecks",
+                "expectedMeasurements",
+                "safetyWarnings",
+                "suggestedSolutions",
+                "missingInformation",
+                "confidenceLevel",
+                "analysisLanguage",
+                "sourceReferences"
+            ],
+            properties: {
+                detectedBrand: { type: ["string", "null"] },
+                detectedModel: { type: ["string", "null"] },
+                detectedSerialNumber: { type: ["string", "null"] },
+                detectedEquipmentType: { type: ["string", "null"] },
+                detectedErrorCode: { type: ["string", "null"] },
+                plateExtractedText: { type: "array", items: { type: "string" } },
+                faultImageExtractedText: { type: "array", items: { type: "string" } },
+                faultDescription: { type: ["string", "null"] },
+                probableCauses: { type: "array", items: { type: "string" } },
+                recommendedChecks: {
+                    type: "array",
+                    items: {
+                        type: "object",
+                        additionalProperties: false,
+                        required: ["title", "instruction", "reason", "expectedResult", "safetyLevel", "order"],
+                        properties: {
+                            title: { type: "string" },
+                            instruction: { type: "string" },
+                            reason: { type: "string" },
+                            expectedResult: { type: "string" },
+                            safetyLevel: { type: "string", enum: ["low", "medium", "high"] },
+                            order: { type: "number" }
+                        }
+                    }
+                },
+                expectedMeasurements: {
+                    type: "array",
+                    items: {
+                        type: "object",
+                        additionalProperties: false,
+                        required: ["measurement", "location", "expectedValue", "unit", "tolerance", "conditions"],
+                        properties: {
+                            measurement: { type: "string" },
+                            location: { type: "string" },
+                            expectedValue: { type: "string" },
+                            unit: { type: ["string", "null"] },
+                            tolerance: { type: ["string", "null"] },
+                            conditions: { type: ["string", "null"] }
+                        }
+                    }
+                },
+                safetyWarnings: { type: "array", items: { type: "string" } },
+                suggestedSolutions: { type: "array", items: { type: "string" } },
+                missingInformation: { type: "array", items: { type: "string" } },
+                confidenceLevel: { type: "number", minimum: 0, maximum: 1 },
+                analysisLanguage: { type: "string", enum: ["fr", "en", "de", "it", "es"] },
+                sourceReferences: {
+                    type: "array",
+                    items: {
+                        type: "object",
+                        additionalProperties: false,
+                        required: [
+                            "documentId",
+                            "title",
+                            "manufacturer",
+                            "originalLanguage",
+                            "displayedLanguage",
+                            "sourceUrl",
+                            "documentReference",
+                            "documentVersion",
+                            "pagesUsed",
+                            "sectionsUsed",
+                            "excerptsUsed",
+                            "hash",
+                            "verificationStatus"
+                        ],
+                        properties: {
+                            documentId: { type: ["string", "null"] },
+                            title: { type: "string" },
+                            manufacturer: { type: ["string", "null"] },
+                            originalLanguage: { type: ["string", "null"] },
+                            displayedLanguage: { type: ["string", "null"] },
+                            sourceUrl: { type: ["string", "null"] },
+                            documentReference: { type: ["string", "null"] },
+                            documentVersion: { type: ["string", "null"] },
+                            pagesUsed: { type: "array", items: { type: "string" } },
+                            sectionsUsed: { type: "array", items: { type: "string" } },
+                            excerptsUsed: { type: "array", items: { type: "string" } },
+                            hash: { type: ["string", "null"] },
+                            verificationStatus: { type: ["string", "null"], enum: ["a_verifier", "verifie", "rejete", null] }
+                        }
+                    }
+                }
+            }
+        }
+    }
+};
 export const analyzeDiagnostic = onCall({
     region: "europe-west1",
     secrets: [openAiApiKey],
@@ -149,8 +264,11 @@ async function readActiveUser(uid) {
     return user;
 }
 async function readActiveAuthorization(user) {
+    if (typeof user.emailNormalized !== "string" || !user.emailNormalized) {
+        throw new HttpsError("permission-denied", "Email utilisateur non verifie.");
+    }
     const snap = await db.collection("authorizedUsers").doc(user.emailNormalized).get();
-    if (!snap.exists || snap.get("isActive") !== true || snap.get("companyId") !== user.companyId) {
+    if (!snap.exists || snap.get("isActive") !== true || snap.get("companyId") !== user.companyId || snap.get("role") !== user.role) {
         throw new HttpsError("permission-denied", "Utilisateur non autorise.");
     }
 }
@@ -203,7 +321,7 @@ async function analyzeWithOpenAI(photos, language) {
     const client = new OpenAI({ apiKey });
     const response = await client.chat.completions.create({
         model: DIAGNOSTIC_MODEL,
-        response_format: { type: "json_object" },
+        response_format: diagnosticResponseFormat,
         messages: [
             { role: "system", content: buildDiagnosticPrompt(language || "fr") },
             {
@@ -221,5 +339,5 @@ async function analyzeWithOpenAI(photos, language) {
     const content = response.choices[0]?.message?.content;
     if (!content)
         throw new Error("empty_openai_response");
-    return validateDiagnosticAIResult(JSON.parse(content));
+    return validateOpenAIDiagnosticPayload(JSON.parse(content));
 }

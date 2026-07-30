@@ -66,6 +66,7 @@ import { createTranslator, hasConfiguredLanguage, getLanguageLabel, type Transla
 import { createEmptyData } from "../services/localRepository";
 import { createAppRepository, type AppRepository } from "../services/repository";
 import { openPrintableReport } from "../services/reportService";
+import { BrandLogo, PolarisLoader } from "./brand";
 
 type View =
   | DashboardView
@@ -370,7 +371,8 @@ export function App() {
     return (
       <main className="login-screen">
         <section className="login-panel">
-          <div className="brand-mark">P</div>
+          <BrandLogo variant="hero" />
+          <PolarisLoader label="Initialisation de Polaris..." />
           <p className="eyebrow">Polaris CVC</p>
           <h1>{t("loadingTitle")}</h1>
           <p className="muted">{t("loadingText")}</p>
@@ -395,7 +397,7 @@ export function App() {
     return (
       <main className="login-screen">
         <section className="login-panel">
-          <div className="brand-mark">P</div>
+          <BrandLogo variant="hero" />
           <p className="eyebrow">Polaris CVC</p>
           <h1>{t("loginTitle")}</h1>
           <p className="muted">{t("loginText")}</p>
@@ -584,6 +586,14 @@ export function App() {
           <section className="stack">
             <InfoCard title={data.company.name} subtitle={t("settings")} icon={<Building2 />} />
             <InfoCard title="IA" subtitle="Service abstrait cree. Fournisseur non active dans cette version." icon={<ShieldCheck />} />
+            <article className="about-card">
+              <BrandLogo variant="lockup" />
+              <div>
+                <p className="eyebrow">A propos</p>
+                <h2>Polaris CVC</h2>
+                <p className="muted">Logiciel professionnel de diagnostic, intervention et documentation CVC.</p>
+              </div>
+            </article>
           </section>
         )}
     </AppShell>
@@ -641,7 +651,7 @@ function AccessDeniedView({
   return (
     <main className="login-screen">
       <section className="login-panel">
-        <div className="brand-mark">P</div>
+        <BrandLogo variant="hero" />
         <p className="eyebrow">Polaris CVC</p>
         <h1>Acces refuse</h1>
         <article className="access-denied-card">

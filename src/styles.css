@@ -1301,3 +1301,617 @@ input[type="range"] {
     grid-template-columns: 1fr;
   }
 }
+
+/* Polaris identity layer */
+:root {
+  color-scheme: dark;
+  --ink: #ffffff;
+  --muted: #9da8b8;
+  --bg: #0b1220;
+  --panel: #111a2b;
+  --panel-strong: #172337;
+  --line: rgba(199, 205, 214, .16);
+  --primary: #2da8ff;
+  --primary-strong: #128de8;
+  --accent: #f5a623;
+  --accent-strong: #f5a623;
+  --metal: #c7cdd6;
+  --success: #35d07f;
+  --danger-bg: rgba(255, 83, 83, .12);
+  --danger: #ff9a9a;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+body {
+  background:
+    linear-gradient(180deg, #070c15 0%, #0b1220 42%, #0d1626 100%);
+  color: var(--ink);
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: .34;
+  background-image:
+    linear-gradient(rgba(45, 168, 255, .08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(45, 168, 255, .06) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: linear-gradient(to bottom, rgba(0,0,0,.85), transparent 72%);
+}
+
+.polaris-brand {
+  display: inline-grid;
+  align-items: center;
+  gap: 12px;
+}
+
+.polaris-brand img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.polaris-brand-mark {
+  width: 54px;
+  height: 54px;
+  overflow: hidden;
+  border: 1px solid rgba(45, 168, 255, .35);
+  border-radius: 8px;
+  background: #050913;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.04), 0 14px 34px rgba(45, 168, 255, .16);
+}
+
+.polaris-brand-mark img {
+  transform: scale(1.72);
+  object-position: 50% 37%;
+}
+
+.polaris-brand-lockup {
+  grid-template-columns: 62px minmax(0, 1fr);
+}
+
+.polaris-brand-lockup > img {
+  width: 62px;
+  height: 62px;
+  border-radius: 8px;
+  border: 1px solid rgba(45, 168, 255, .26);
+}
+
+.polaris-brand-hero {
+  width: min(230px, 76vw);
+  margin-inline: auto;
+}
+
+.polaris-brand-hero > img {
+  aspect-ratio: 1;
+  border-radius: 8px;
+  box-shadow: 0 28px 90px rgba(45, 168, 255, .22);
+}
+
+.polaris-brand-copy strong,
+.polaris-brand-copy small {
+  display: block;
+}
+
+.polaris-brand-copy strong {
+  color: #fff;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.polaris-brand-copy small {
+  color: var(--metal);
+  font-size: 12px;
+}
+
+.brand-mark {
+  background: transparent;
+}
+
+.app-shell,
+.app-main {
+  background: transparent;
+}
+
+.sidebar {
+  background:
+    linear-gradient(180deg, rgba(9, 16, 30, .98), rgba(11, 18, 32, .94)),
+    #0b1220;
+  border-right: 1px solid rgba(199, 205, 214, .12);
+  box-shadow: 18px 0 60px rgba(0, 0, 0, .22);
+}
+
+.sidebar-brand {
+  min-height: 70px;
+}
+
+.sidebar-brand strong {
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.sidebar-brand small {
+  color: var(--metal);
+}
+
+.sidebar-nav button,
+.sidebar-toggle {
+  color: #c7cdd6;
+  border: 1px solid transparent;
+  transition: background .18s ease, color .18s ease, border-color .18s ease, transform .18s ease;
+}
+
+.sidebar-nav button:hover,
+.sidebar-toggle:hover,
+.sidebar-nav button:focus-visible,
+.sidebar-toggle:focus-visible {
+  background: rgba(45, 168, 255, .10);
+  border-color: rgba(45, 168, 255, .28);
+  color: #fff;
+  outline: none;
+}
+
+.sidebar-nav button.active {
+  background: linear-gradient(135deg, rgba(45, 168, 255, .22), rgba(245, 166, 35, .12));
+  border-color: rgba(45, 168, 255, .46);
+  color: #fff;
+  box-shadow: inset 3px 0 0 var(--primary), 0 12px 32px rgba(45, 168, 255, .10);
+}
+
+.topbar {
+  background: rgba(11, 18, 32, .82);
+  border-bottom: 1px solid rgba(199, 205, 214, .14);
+  backdrop-filter: blur(18px);
+}
+
+.topbar h1,
+.login-panel h1,
+.dashboard-hero h2,
+.result-head h2 {
+  color: #fff;
+}
+
+.eyebrow {
+  color: var(--primary);
+  letter-spacing: .14em;
+}
+
+.muted,
+small {
+  color: var(--muted);
+}
+
+.login-screen {
+  background:
+    linear-gradient(135deg, rgba(5, 9, 18, .98), rgba(11, 18, 32, .94)),
+    linear-gradient(90deg, rgba(45,168,255,.08), rgba(245,166,35,.08));
+}
+
+.login-panel {
+  background: rgba(17, 26, 43, .88);
+  border: 1px solid rgba(199, 205, 214, .16);
+  color: #fff;
+  box-shadow: 0 30px 110px rgba(0, 0, 0, .44);
+  backdrop-filter: blur(22px);
+  max-width: calc(100vw - 32px);
+  overflow: hidden;
+}
+
+.polaris-loader {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(45, 168, 255, .18);
+  border-radius: 8px;
+  background: rgba(4, 9, 18, .42);
+}
+
+.polaris-loader .polaris-brand-mark {
+  width: 46px;
+  height: 46px;
+}
+
+.polaris-loader span {
+  width: 72px;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(199, 205, 214, .16);
+}
+
+.polaris-loader span::before {
+  content: "";
+  display: block;
+  width: 36px;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--primary), var(--accent));
+  animation: polaris-loader-line 1.2s ease-in-out infinite;
+}
+
+.notice {
+  background: rgba(45, 168, 255, .10);
+  color: #c9edff;
+  border-color: rgba(45, 168, 255, .24);
+}
+
+.auth-error,
+.access-denied-card,
+.error-box {
+  background: var(--danger-bg);
+  color: var(--danger);
+  border-color: rgba(255, 154, 154, .32);
+}
+
+.content.app-content {
+  max-width: 1240px;
+}
+
+.dashboard-page {
+  gap: 18px;
+}
+
+.dashboard-hero {
+  min-height: 238px;
+  border: 1px solid rgba(45, 168, 255, .22);
+  background:
+    linear-gradient(135deg, rgba(17, 26, 43, .96), rgba(13, 25, 44, .92)),
+    linear-gradient(90deg, rgba(45,168,255,.20), rgba(245,166,35,.16));
+  box-shadow: 0 24px 80px rgba(0, 0, 0, .28);
+}
+
+.dashboard-hero-logo {
+  margin-bottom: 18px;
+}
+
+.dashboard-card,
+.dashboard-stat-card,
+.form-card,
+.list-card,
+.info-card,
+.profile-card,
+.detail,
+.report-sections article,
+.diagnostic-hero,
+.diagnostic-step,
+.diagnostic-progress,
+.diagnostic-conversation,
+.diagnostic-archive-card,
+.plate-preview-card,
+.identification-card,
+.mini-stat,
+.empty-state,
+.document-card,
+.candidate-card,
+.about-card,
+.dashboard-panel {
+  background: linear-gradient(180deg, rgba(23, 35, 55, .96), rgba(15, 24, 40, .96));
+  border-color: rgba(199, 205, 214, .14);
+  color: #fff;
+  box-shadow: 0 18px 52px rgba(0, 0, 0, .20);
+}
+
+.dashboard-card,
+.quick-card,
+.primary,
+.secondary,
+.photo-button,
+.icon-button,
+.menu-button {
+  transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease, background .16s ease;
+}
+
+.dashboard-card:hover,
+.dashboard-card:focus-visible,
+.quick-card:hover,
+.primary:hover,
+.secondary:hover,
+.photo-button:hover,
+.icon-button:hover,
+.menu-button:hover {
+  transform: translateY(-1px);
+}
+
+.dashboard-card-icon,
+.icon-box {
+  background: rgba(45, 168, 255, .12);
+  color: var(--primary);
+  border: 1px solid rgba(45, 168, 255, .22);
+}
+
+.dashboard-stat-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.dashboard-stat-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: linear-gradient(180deg, var(--primary), var(--accent));
+}
+
+.dashboard-stat-card strong {
+  color: #fff;
+}
+
+.dashboard-latest-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.dashboard-panel {
+  border-radius: 8px;
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.dashboard-row {
+  display: grid;
+  gap: 4px;
+  padding: 10px 0;
+  border-top: 1px solid rgba(199, 205, 214, .12);
+}
+
+.dashboard-row:first-of-type {
+  border-top: 0;
+}
+
+.primary {
+  background: linear-gradient(135deg, var(--primary), #166eb8);
+  color: #fff;
+  box-shadow: 0 14px 34px rgba(45, 168, 255, .22);
+}
+
+.secondary,
+.photo-button {
+  background: rgba(45, 168, 255, .10);
+  color: #d6f1ff;
+  border-color: rgba(45, 168, 255, .24);
+}
+
+input,
+select,
+textarea,
+.search-box {
+  background: rgba(6, 12, 23, .72);
+  color: #fff;
+  border-color: rgba(199, 205, 214, .18);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #6f7c90;
+}
+
+label {
+  color: #d9e3ef;
+}
+
+.status-pill,
+.sync,
+.tag-row span {
+  background: rgba(199, 205, 214, .10);
+  color: #d9e3ef;
+  border: 1px solid rgba(199, 205, 214, .12);
+}
+
+.sync-ok {
+  color: #b9ffd6;
+  background: rgba(53, 208, 127, .12);
+}
+
+.sync-offline {
+  color: #ffe4aa;
+  background: rgba(245, 166, 35, .14);
+}
+
+.floating-action {
+  background: linear-gradient(135deg, var(--accent), #d98212);
+  color: #15100a;
+  box-shadow: 0 18px 48px rgba(245, 166, 35, .22);
+}
+
+.diagnostic-ai-state {
+  min-height: 124px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid rgba(45, 168, 255, .28);
+  border-radius: 8px;
+  background: linear-gradient(135deg, rgba(13, 25, 44, .98), rgba(16, 28, 46, .94));
+  box-shadow: 0 20px 60px rgba(0, 0, 0, .24);
+}
+
+.diagnostic-ai-state strong {
+  color: #fff;
+  display: block;
+  margin-bottom: 6px;
+}
+
+.ai-orbit {
+  position: relative;
+  width: 78px;
+  height: 78px;
+  display: grid;
+  place-items: center;
+}
+
+.ai-orbit .polaris-brand-mark {
+  width: 54px;
+  height: 54px;
+}
+
+.ai-orbit > span {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  border: 2px solid rgba(199, 205, 214, .14);
+  border-top-color: var(--primary);
+  border-right-color: var(--accent);
+  animation: polaris-spin 1.1s linear infinite;
+}
+
+.diagnostic-ai-state.is-complete {
+  border-color: rgba(53, 208, 127, .42);
+}
+
+.diagnostic-ai-state.is-complete .ai-orbit > span {
+  border-color: rgba(53, 208, 127, .42);
+  animation: polaris-complete .55s ease-out both;
+}
+
+.diagnostic-ai-state.is-complete strong {
+  color: #b9ffd6;
+}
+
+.diagnostic-message-card {
+  border-left-color: var(--primary);
+  background: rgba(45, 168, 255, .08);
+}
+
+.plate-preview,
+.diagnostic-photo-card,
+.import-zone,
+.library-future div,
+.voice-placeholder {
+  background: rgba(6, 12, 23, .62);
+  border-color: rgba(199, 205, 214, .16);
+  color: var(--metal);
+}
+
+.mini-stat svg,
+.section-title svg,
+.library-future svg,
+.quick-card svg {
+  color: var(--primary);
+}
+
+.icon-action {
+  color: var(--accent);
+  background: rgba(245, 166, 35, .12);
+}
+
+.document-main {
+  color: #fff;
+}
+
+.bottom-nav,
+.mobile-nav {
+  background: rgba(11, 18, 32, .92);
+  border-top-color: rgba(199, 205, 214, .16);
+}
+
+.bottom-nav button,
+.mobile-nav button {
+  color: var(--metal);
+}
+
+.bottom-nav button.active,
+.mobile-nav button.active {
+  background: rgba(45, 168, 255, .16);
+  color: #fff;
+}
+
+.about-card {
+  border-radius: 8px;
+  padding: 18px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 18px;
+  align-items: center;
+}
+
+.about-card h2 {
+  margin: 0 0 6px;
+}
+
+@keyframes polaris-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes polaris-loader-line {
+  0% {
+    transform: translateX(-42px);
+  }
+  50% {
+    transform: translateX(42px);
+  }
+  100% {
+    transform: translateX(98px);
+  }
+}
+
+@keyframes polaris-complete {
+  from {
+    transform: scale(.86);
+    opacity: .55;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@media (max-width: 860px) {
+  .dashboard-latest-grid,
+  .about-card {
+    grid-template-columns: 1fr;
+  }
+
+  .diagnostic-ai-state {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    text-align: center;
+  }
+}
+
+@media (max-width: 420px) {
+  .login-screen {
+    padding: 16px;
+  }
+
+  .login-panel {
+    width: 100%;
+    max-width: 100%;
+    padding: 18px;
+  }
+
+  .login-panel h1 {
+    font-size: 28px;
+    overflow-wrap: anywhere;
+  }
+
+  .polaris-brand-hero {
+    width: min(190px, 62vw);
+  }
+
+  .dashboard-hero {
+    min-height: 220px;
+  }
+
+  .dashboard-hero-logo {
+    margin-bottom: 12px;
+  }
+
+  .polaris-brand-lockup {
+    grid-template-columns: 52px minmax(0, 1fr);
+  }
+
+  .polaris-brand-lockup > img {
+    width: 52px;
+    height: 52px;
+  }
+}

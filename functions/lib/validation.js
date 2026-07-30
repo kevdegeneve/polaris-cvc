@@ -6,6 +6,17 @@ export function validateDiagnosticAIResult(value) {
     if (!isRecord(value))
         throw new Error("invalid_result_object");
     const result = {
+        ...validateOpenAIDiagnosticPayload(value),
+        analyzedAt: requiredString(value.analyzedAt, "analyzedAt"),
+        modelUsed: requiredString(value.modelUsed, "modelUsed"),
+        promptVersion: requiredString(value.promptVersion, "promptVersion")
+    };
+    return result;
+}
+export function validateOpenAIDiagnosticPayload(value) {
+    if (!isRecord(value))
+        throw new Error("invalid_result_object");
+    const result = {
         detectedBrand: nullableString(value.detectedBrand, "detectedBrand"),
         detectedModel: nullableString(value.detectedModel, "detectedModel"),
         detectedSerialNumber: nullableString(value.detectedSerialNumber, "detectedSerialNumber"),
@@ -22,10 +33,7 @@ export function validateDiagnosticAIResult(value) {
         missingInformation: stringArray(value.missingInformation, "missingInformation"),
         confidenceLevel: confidence(value.confidenceLevel),
         analysisLanguage: language(value.analysisLanguage),
-        sourceReferences: sourceArray(value.sourceReferences),
-        analyzedAt: requiredString(value.analyzedAt, "analyzedAt"),
-        modelUsed: requiredString(value.modelUsed, "modelUsed"),
-        promptVersion: requiredString(value.promptVersion, "promptVersion")
+        sourceReferences: sourceArray(value.sourceReferences)
     };
     return result;
 }

@@ -1,6 +1,16 @@
 import { useMemo, useState } from "react";
 import { Archive, Camera, CheckCircle2, FileText, ImagePlus, Plus, Trash2 } from "lucide-react";
-import type { AppData, AppUser, Diagnostic, DiagnosticAIResult, DiagnosticMessage, DiagnosticPhoto, DiagnosticPhotoCategory, UserPreferredLanguage } from "../domain/types";
+import type {
+  AppData,
+  AppUser,
+  Diagnostic,
+  DiagnosticAIResult,
+  DiagnosticMessage,
+  DiagnosticPhoto,
+  DiagnosticPhotoCategory,
+  DiagnosticStatus,
+  UserPreferredLanguage
+} from "../domain/types";
 import { diagnosticAIService } from "../services/diagnosticAIService";
 import {
   canStartDiagnostic,
@@ -12,6 +22,7 @@ import {
 } from "../services/diagnosticService";
 import { uploadDiagnosticPhoto, validateDiagnosticImage, type DiagnosticUploadProgress } from "../services/diagnosticUploadService";
 import { getLanguageLabel, languageOptions, translate, type TranslationKey } from "../services/languageService";
+import { BrandLogo } from "./brand";
 
 interface LocalDiagnosticPhoto {
   id: string;
@@ -70,7 +81,7 @@ export function LanguageSelectionScreen({
   return (
     <main className="login-screen">
       <section className="login-panel">
-        <div className="brand-mark">P</div>
+        <BrandLogo variant="hero" />
         <p className="eyebrow">{t("appName")}</p>
         <h1>{t("languageTitle")}</h1>
         <p className="muted">{user.displayName} - {t("languageIntro")}</p>
@@ -104,7 +115,8 @@ export function DiagnosticStartView({
   const [preparedPhotos, setPreparedPhotos] = useState<DiagnosticPhoto[]>([]);
   const [analysisResult, setAnalysisResult] = useState<DiagnosticAIResult | null>(null);
   const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
-  const status = getDiagnosticStatus(photos, isAnalyzing);
+  const [workflowStatus, setWorkflowStatus] = useState<DiagnosticStatus | null>(null);
+  const status = workflowStatus || getDiagnosticStatus(photos, isAnalyzing);
   const canAnalyze = canStartDiagnostic(photos);
   const aiAvailable = diagnosticAIService.isAvailable();
 
@@ -141,6 +153,10 @@ export function DiagnosticStartView({
     setAnalyzing(true);
     setError("");
     setAnalysisResult(null);
+    setWorkflowStatus("uploading_photos");
+    let latestDiagnostic: Diagnostic | null = null;
+    let latestPhotos: DiagnosticPhoto[] = [];
+    let latestMessages: DiagnosticMessage[] = [];
     try {
       const diagnostic = createDiagnosticDraft({
         companyId: data.company.id,
@@ -164,6 +180,8 @@ export function DiagnosticStartView({
         photoIds: diagnosticPhotos.map((photo) => photo.id),
         updatedAt: new Date().toISOString()
       };
+      latestDiagnostic = uploadingDiagnostic;
+      latestPhotos = diagnosticPhotos;
       await onSave(uploadingDiagnostic, diagnosticPhotos, []);
       const uploadedPhotos = await Promise.all(
         diagnosticPhotos.map(async (photo, index) => {
@@ -178,12 +196,18 @@ export function DiagnosticStartView({
           };
         })
       );
-      const analyzingDiagnostic: Diagnostic = {
+      const readyDiagnostic: Diagnostic = {
         ...uploadingDiagnostic,
-        status: "analyzing",
+        status: "ready_for_analysis",
         updatedAt: new Date().toISOString()
       };
-      await onSave(analyzingDiagnostic, uploadedPhotos, []);
+      setPreparedDiagnostic(readyDiagnostic);
+      setPreparedPhotos(uploadedPhotos);
+      latestDiagnostic = readyDiagnostic;
+      latestPhotos = uploadedPhotos;
+      setWorkflowStatus("ready_for_analysis");
+      await onSave(readyDiagnostic, uploadedPhotos, []);
+      setWorkflowStatus("analyzing");
       const aiResponse = await diagnosticAIService.analyzeInitialPhotos({
         diagnosticId: diagnostic.id
       });
@@ -235,9 +259,28 @@ export function DiagnosticStartView({
       setPreparedDiagnostic(waitingDiagnostic);
       setPreparedPhotos(uploadedPhotos);
       setAnalysisResult(result);
+      latestDiagnostic = waitingDiagnostic;
+      latestPhotos = uploadedPhotos;
+      latestMessages = [message];
       await onSave(waitingDiagnostic, uploadedPhotos, [message]);
+      setWorkflowStatus("awaiting_technician_input");
     } catch (analysisError) {
-      setError(analysisError instanceof Error ? analysisError.message : "Le diagnostic n'a pas pu etre prepare.");
+      const message = analysisError instanceof Error ? analysisError.message : "Le diagnostic n'a pas pu etre prepare.";
+      setError(message);
+      setWorkflowStatus("analysis_failed");
+      if (latestDiagnostic) {
+        const timestamp = new Date().toISOString();
+        await onSave(
+          {
+            ...latestDiagnostic,
+            status: "analysis_failed",
+            analysisError: message,
+            updatedAt: timestamp
+          },
+          latestPhotos,
+          latestMessages
+        );
+      }
     } finally {
       setAnalyzing(false);
     }
@@ -269,7 +312,7 @@ export function DiagnosticStartView({
         <p className="eyebrow">Diagnostic chantier</p>
         <h2>{getLanguageLabel(user.preferredLanguage || "fr")} - {getDiagnosticText(user.preferredLanguage || "fr", "title")}</h2>
         <p className="muted">{getDiagnosticText(user.preferredLanguage || "fr", "captureOnly")}</p>
-        <p className="auth-error">{getDiagnosticText(user.preferredLanguage || "fr", "aiUnavailable")}</p>
+        {!aiAvailable && <p className="auth-error">{getDiagnosticText(user.preferredLanguage || "fr", "aiUnavailable")}</p>}
       </div>
 
       <div className="diagnostic-required-grid">
@@ -304,6 +347,8 @@ export function DiagnosticStartView({
         <CheckCircle2 size={22} /> {isAnalyzing ? "Analyse en cours..." : canAnalyze ? "Pret pour l'analyse" : "Ajouter les deux photos"}
       </button>
       {!aiAvailable && <p className="auth-error">{getDiagnosticText(user.preferredLanguage || "fr", "aiUnavailable")}</p>}
+      {isAnalyzing && <DiagnosticAIAnimation state="analyzing" />}
+      {!isAnalyzing && analysisResult && <DiagnosticAIAnimation state="completed" />}
       {Object.keys(uploadProgress).length > 0 && <DiagnosticUploadProgress progress={uploadProgress} />}
       {analysisResult && <DiagnosticResultView result={analysisResult} />}
       {conversation.length > 0 && (
@@ -314,6 +359,22 @@ export function DiagnosticStartView({
           </button>
         </>
       )}
+    </section>
+  );
+}
+
+function DiagnosticAIAnimation({ state }: { state: "analyzing" | "completed" }) {
+  const isCompleted = state === "completed";
+  return (
+    <section className={`diagnostic-ai-state ${isCompleted ? "is-complete" : "is-analyzing"}`}>
+      <div className="ai-orbit">
+        <BrandLogo variant="mark" />
+        <span />
+      </div>
+      <div>
+        <strong>{isCompleted ? "Analyse IA Polaris terminee" : "Analyse IA Polaris en cours..."}</strong>
+        <small>{isCompleted ? "Resultat structure valide et pret a consulter." : "Lecture des images, controle du contexte et validation du diagnostic."}</small>
+      </div>
     </section>
   );
 }
@@ -453,7 +514,6 @@ function DiagnosticProgress({ status, photoCount, preferredLanguage }: { status:
       <small>
         {photoCount} photo(s) ajoutee(s) - langue de travail : {getLanguageLabel(preferredLanguage)}
       </small>
-      <small>L'IA multimodale n'est pas encore connectee. Polaris prepare le parcours, les sources et l'archive.</small>
     </section>
   );
 }
