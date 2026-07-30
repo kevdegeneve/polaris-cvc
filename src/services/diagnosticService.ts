@@ -14,7 +14,7 @@ export interface DiagnosticPhotoInput {
 }
 
 export function canStartDiagnostic(photos: Array<{ category: DiagnosticPhotoCategory }>): boolean {
-  return photos.some((item) => item.category === "plaque_signaletique") && photos.some((item) => item.category === "code_erreur");
+  return photos.length > 0;
 }
 
 export function getDiagnosticStatus(photos: Array<{ category: DiagnosticPhotoCategory }>, isAnalyzing = false): DiagnosticStatus {

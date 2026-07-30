@@ -31,6 +31,7 @@ export function validateOpenAIDiagnosticPayload(value) {
         safetyWarnings: stringArray(value.safetyWarnings, "safetyWarnings"),
         suggestedSolutions: stringArray(value.suggestedSolutions, "suggestedSolutions"),
         missingInformation: stringArray(value.missingInformation, "missingInformation"),
+        recommendedAdditionalPhotos: stringArray(value.recommendedAdditionalPhotos, "recommendedAdditionalPhotos"),
         confidenceLevel: confidence(value.confidenceLevel),
         analysisLanguage: language(value.analysisLanguage),
         sourceReferences: sourceArray(value.sourceReferences)

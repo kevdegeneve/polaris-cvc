@@ -56,7 +56,19 @@ const photoCategories: Array<{ value: DiagnosticPhotoCategory; label: string }> 
   { value: "autre", label: "Autre" }
 ];
 
-type DiagnosticTextKey = "title" | "captureOnly" | "aiUnavailable" | "aiUnavailableShort" | "photoPlate" | "photoFault" | "extraPhotos";
+type DiagnosticTextKey =
+  | "title"
+  | "captureOnly"
+  | "aiUnavailable"
+  | "aiUnavailableShort"
+  | "photoPlate"
+  | "photoFault"
+  | "extraPhotos"
+  | "photoMinimum"
+  | "photoReady"
+  | "singlePhotoPrecisionHint"
+  | "multiplePhotoPrecisionHint"
+  | "recommendedAdditionalPhotos";
 
 function getDiagnosticText(language: UserPreferredLanguage, key: DiagnosticTextKey): string {
   const map: Record<DiagnosticTextKey, TranslationKey> = {
@@ -66,7 +78,12 @@ function getDiagnosticText(language: UserPreferredLanguage, key: DiagnosticTextK
     aiUnavailableShort: "aiUnavailableShort",
     photoPlate: "photoPlate",
     photoFault: "photoFault",
-    extraPhotos: "extraPhotos"
+    extraPhotos: "extraPhotos",
+    photoMinimum: "photoMinimum",
+    photoReady: "photoReady",
+    singlePhotoPrecisionHint: "singlePhotoPrecisionHint",
+    multiplePhotoPrecisionHint: "multiplePhotoPrecisionHint",
+    recommendedAdditionalPhotos: "recommendedAdditionalPhotos"
   };
   return translate(language, map[key]);
 }
@@ -143,6 +160,12 @@ export function DiagnosticStartView({
   const status = workflowStatus || getDiagnosticStatus(photos, isAnalyzing);
   const canAnalyze = canStartDiagnostic(photos);
   const aiAvailable = diagnosticAIService.isAvailable();
+  const preferredLanguage = user.preferredLanguage || "fr";
+  const photoGuidance = photos.length === 0
+    ? getDiagnosticText(preferredLanguage, "photoMinimum")
+    : photos.length === 1
+      ? getDiagnosticText(preferredLanguage, "singlePhotoPrecisionHint")
+      : getDiagnosticText(preferredLanguage, "multiplePhotoPrecisionHint");
 
   function addPhoto(file: File | undefined, category: DiagnosticPhotoCategory) {
     if (!file) return;
@@ -355,14 +378,14 @@ export function DiagnosticStartView({
     <section className="diagnostic-page">
       <div className="diagnostic-hero">
         <p className="eyebrow">Diagnostic chantier</p>
-        <h2>{getLanguageLabel(user.preferredLanguage || "fr")} - {getDiagnosticText(user.preferredLanguage || "fr", "title")}</h2>
-        <p className="muted">{getDiagnosticText(user.preferredLanguage || "fr", "captureOnly")}</p>
-        {!aiAvailable && <p className="auth-error">{getDiagnosticText(user.preferredLanguage || "fr", "aiUnavailable")}</p>}
+        <h2>{getLanguageLabel(preferredLanguage)} - {getDiagnosticText(preferredLanguage, "title")}</h2>
+        <p className="muted">{getDiagnosticText(preferredLanguage, "captureOnly")}</p>
+        {!aiAvailable && <p className="auth-error">{getDiagnosticText(preferredLanguage, "aiUnavailable")}</p>}
       </div>
 
       <div className="diagnostic-required-grid">
         <RequiredPhotoStep
-          title={getDiagnosticText(user.preferredLanguage || "fr", "photoPlate")}
+          title={getDiagnosticText(preferredLanguage, "photoPlate")}
           category="plaque_signaletique"
           photos={photos}
           onAdd={addPhoto}
@@ -370,7 +393,7 @@ export function DiagnosticStartView({
           onCategoryChange={updateCategory}
         />
         <RequiredPhotoStep
-          title={getDiagnosticText(user.preferredLanguage || "fr", "photoFault")}
+          title={getDiagnosticText(preferredLanguage, "photoFault")}
           category="code_erreur"
           photos={photos}
           onAdd={addPhoto}
@@ -381,21 +404,22 @@ export function DiagnosticStartView({
 
       <AdditionalPhotosPanel
         photos={photos}
-        language={user.preferredLanguage || "fr"}
+        language={preferredLanguage}
         onAdd={addPhoto}
         onRemove={removePhoto}
         onCategoryChange={updateCategory}
       />
-      <DiagnosticProgress status={status} photoCount={photos.length} preferredLanguage={user.preferredLanguage || "fr"} />
+      <p className={photos.length === 0 ? "auth-error" : "diagnostic-helper"}>{photoGuidance}</p>
+      <DiagnosticProgress status={status} photoCount={photos.length} preferredLanguage={preferredLanguage} />
       {error && <p className="auth-error">{error}</p>}
       <button className="primary large sticky-action" disabled={!canAnalyze || isAnalyzing || !aiAvailable} onClick={startAnalysis}>
-        <CheckCircle2 size={22} /> {isAnalyzing ? "Analyse en cours..." : canAnalyze ? "Pret pour l'analyse" : "Ajouter les deux photos"}
+        <CheckCircle2 size={22} /> {isAnalyzing ? "Analyse en cours..." : canAnalyze ? getDiagnosticText(preferredLanguage, "photoReady") : getDiagnosticText(preferredLanguage, "photoMinimum")}
       </button>
-      {!aiAvailable && <p className="auth-error">{getDiagnosticText(user.preferredLanguage || "fr", "aiUnavailable")}</p>}
+      {!aiAvailable && <p className="auth-error">{getDiagnosticText(preferredLanguage, "aiUnavailable")}</p>}
       {isAnalyzing && <DiagnosticAIAnimation state="analyzing" />}
       {!isAnalyzing && analysisResult && <DiagnosticAIAnimation state="completed" />}
       {Object.keys(uploadProgress).length > 0 && <DiagnosticUploadProgress progress={uploadProgress} />}
-      {analysisResult && <DiagnosticResultView result={analysisResult} />}
+      {analysisResult && <DiagnosticResultView result={analysisResult} language={preferredLanguage} />}
       {memoryInsight && <TechnicalMemoryInsightView insight={memoryInsight} />}
       {analysisResult && (
         <TechnicalMemoryFeedbackForm
@@ -569,7 +593,8 @@ function DiagnosticUploadProgress({ progress }: { progress: Record<string, numbe
   );
 }
 
-function DiagnosticResultView({ result }: { result: DiagnosticAIResult }) {
+function DiagnosticResultView({ result, language }: { result: DiagnosticAIResult; language: UserPreferredLanguage }) {
+  const recommendedAdditionalPhotos = result.recommendedAdditionalPhotos || [];
   return (
     <section className="diagnostic-conversation">
       <h3>Equipement detecte</h3>
@@ -586,6 +611,16 @@ function DiagnosticResultView({ result }: { result: DiagnosticAIResult }) {
       ))}
       <h3>Niveau de confiance</h3>
       <p>{Math.round(result.confidenceLevel * 100)}%</p>
+      {recommendedAdditionalPhotos.length > 0 && (
+        <>
+          <h3>{getDiagnosticText(language, "recommendedAdditionalPhotos")}</h3>
+          <ul>
+            {recommendedAdditionalPhotos.map((photo) => (
+              <li key={photo}>{photo}</li>
+            ))}
+          </ul>
+        </>
+      )}
       <h3>Sources</h3>
       <p className="muted">{result.sourceReferences.length === 0 ? "Aucune documentation technique associee a cette premiere analyse." : `${result.sourceReferences.length} source(s)`}</p>
     </section>

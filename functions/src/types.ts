@@ -49,6 +49,7 @@ export interface DiagnosticAIResult {
   safetyWarnings: string[];
   suggestedSolutions: string[];
   missingInformation: string[];
+  recommendedAdditionalPhotos: string[];
   confidenceLevel: number;
   analysisLanguage: UserPreferredLanguage;
   sourceReferences: SourceReference[];

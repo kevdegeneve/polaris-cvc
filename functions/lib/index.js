@@ -36,6 +36,7 @@ const diagnosticResponseFormat = {
                 "safetyWarnings",
                 "suggestedSolutions",
                 "missingInformation",
+                "recommendedAdditionalPhotos",
                 "confidenceLevel",
                 "analysisLanguage",
                 "sourceReferences"
@@ -85,6 +86,7 @@ const diagnosticResponseFormat = {
                 safetyWarnings: { type: "array", items: { type: "string" } },
                 suggestedSolutions: { type: "array", items: { type: "string" } },
                 missingInformation: { type: "array", items: { type: "string" } },
+                recommendedAdditionalPhotos: { type: "array", items: { type: "string" } },
                 confidenceLevel: { type: "number", minimum: 0, maximum: 1 },
                 analysisLanguage: { type: "string", enum: ["fr", "en", "de", "it", "es"] },
                 sourceReferences: {
@@ -168,8 +170,8 @@ export const analyzeDiagnostic = onCall({
         const diagnostic = { id: diagnosticSnap.id, ...diagnosticSnap.data() };
         assertDiagnosticAccess(diagnostic, user, uid);
         const photos = (await photosQuery.get()).docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-        const requiredPhotos = selectRequiredPhotos(photos, diagnosticId);
-        const loadedPhotos = await Promise.all(requiredPhotos.map(loadPhoto));
+        const usablePhotos = selectUsablePhotos(photos, diagnosticId);
+        const loadedPhotos = await Promise.all(usablePhotos.map(loadPhoto));
         const photoSignature = createHash("sha256")
             .update(loadedPhotos.map((photo) => `${photo.path}:${photo.hash}`).join("|"))
             .update(DIAGNOSTIC_PROMPT_VERSION)
@@ -215,7 +217,7 @@ export const analyzeDiagnostic = onCall({
             modelUsed: DIAGNOSTIC_MODEL,
             updatedAt: new Date().toISOString()
         }), { merge: true });
-        await Promise.all(requiredPhotos.map((photo) => db.collection("diagnosticPhotos").doc(photo.id).set({ analysisStatus: "analyzed", updatedAt: new Date().toISOString() }, { merge: true })));
+        await Promise.all(usablePhotos.map((photo) => db.collection("diagnosticPhotos").doc(photo.id).set({ analysisStatus: "analyzed", updatedAt: new Date().toISOString() }, { merge: true })));
         console.info("diagnostic_analysis_completed", {
             diagnosticId,
             uid: uid.slice(0, 8),
@@ -497,20 +499,15 @@ function assertDiagnosticAccess(diagnostic, user, uid) {
 function isAdmin(user) {
     return user.role === "admin" || user.role === "administrateur";
 }
-function selectRequiredPhotos(photos, diagnosticId) {
-    const plate = photos.find((photo) => photo.category === "plaque_signaletique");
-    const fault = photos.find((photo) => photo.category === "code_erreur");
-    if (!plate || !fault)
-        throw new HttpsError("failed-precondition", "Les deux photos obligatoires sont requises.");
-    for (const photo of [plate, fault]) {
-        if (!photo.storagePath.startsWith(`diagnostics/${diagnosticId}/photos/`))
-            throw new HttpsError("permission-denied", "Chemin Storage invalide.");
-        if (!allowedMimeTypes.includes(photo.mimeType))
-            throw new HttpsError("invalid-argument", "Type MIME invalide.");
-        if (photo.size > maxImageSize)
-            throw new HttpsError("invalid-argument", "Image trop volumineuse.");
-    }
-    return [plate, fault];
+function selectUsablePhotos(photos, diagnosticId) {
+    const usablePhotos = photos.filter((photo) => {
+        return (photo.storagePath.startsWith(`diagnostics/${diagnosticId}/photos/`)
+            && allowedMimeTypes.includes(photo.mimeType)
+            && photo.size <= maxImageSize);
+    });
+    if (usablePhotos.length === 0)
+        throw new HttpsError("failed-precondition", "Au moins une photo exploitable est requise.");
+    return usablePhotos;
 }
 async function loadPhoto(photo) {
     const file = getStorage().bucket().file(photo.storagePath);
@@ -543,7 +540,10 @@ async function analyzeWithOpenAI(photos, language) {
             {
                 role: "user",
                 content: [
-                    { type: "text", text: "Analyze these two HVAC diagnostic images. First image is the nameplate, second image is the fault or error code. Return strict JSON only." },
+                    {
+                        type: "text",
+                        text: "Analyze all available HVAC diagnostic images. Some expected views may be missing. Do not invent unreadable references or error codes. Return a diagnostic with uncertainty and recommended additional photos when needed. Return strict JSON only."
+                    },
                     ...photos.map((photo) => ({
                         type: "image_url",
                         image_url: { url: `data:${photo.mimeType};base64,${photo.base64}` }

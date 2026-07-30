@@ -8,14 +8,17 @@ import {
 } from "./diagnosticService";
 
 describe("diagnosticService", () => {
-  it("requires plate and fault photos before analysis", () => {
-    expect(canStartDiagnostic([{ category: "plaque_signaletique" }])).toBe(false);
-    expect(canStartDiagnostic([{ category: "code_erreur" }])).toBe(false);
+  it("allows analysis as soon as one photo is available", () => {
+    expect(canStartDiagnostic([])).toBe(false);
+    expect(canStartDiagnostic([{ category: "plaque_signaletique" }])).toBe(true);
+    expect(canStartDiagnostic([{ category: "code_erreur" }])).toBe(true);
+    expect(canStartDiagnostic([{ category: "autre" }])).toBe(true);
     expect(canStartDiagnostic([{ category: "plaque_signaletique" }, { category: "code_erreur" }])).toBe(true);
   });
 
-  it("keeps analysis blocked while one required photo is missing", () => {
-    expect(getDiagnosticStatus([{ category: "plaque_signaletique" }])).toBe("draft");
+  it("keeps analysis blocked only while no photo is available", () => {
+    expect(getDiagnosticStatus([])).toBe("draft");
+    expect(getDiagnosticStatus([{ category: "plaque_signaletique" }])).toBe("ready_for_analysis");
     expect(getDiagnosticStatus([{ category: "plaque_signaletique" }, { category: "code_erreur" }])).toBe("ready_for_analysis");
     expect(getDiagnosticStatus([{ category: "plaque_signaletique" }, { category: "code_erreur" }], true)).toBe("analyzing");
   });

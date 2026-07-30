@@ -17,6 +17,7 @@ const validResult = {
   safetyWarnings: [],
   suggestedSolutions: [],
   missingInformation: ["Plaque illisible"],
+  recommendedAdditionalPhotos: ["Plaque signaletique complete"],
   confidenceLevel: 0.4,
   analysisLanguage: "fr",
   sourceReferences: [],
@@ -31,6 +32,12 @@ describe("diagnostic analysis validation", () => {
 
     expect(result.detectedBrand).toBeNull();
     expect(result.sourceReferences).toEqual([]);
+  });
+
+  it("requires structured additional photo recommendations", () => {
+    expect(() => validateOpenAIDiagnosticPayload({ ...validResult, recommendedAdditionalPhotos: undefined })).toThrow(
+      "invalid_recommendedAdditionalPhotos"
+    );
   });
 
   it("accepts OpenAI technical payload before server metadata is added", () => {
