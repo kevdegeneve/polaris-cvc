@@ -32,6 +32,7 @@ export function validateOpenAIDiagnosticPayload(value) {
         suggestedSolutions: stringArray(value.suggestedSolutions, "suggestedSolutions"),
         missingInformation: stringArray(value.missingInformation, "missingInformation"),
         recommendedAdditionalPhotos: stringArray(value.recommendedAdditionalPhotos, "recommendedAdditionalPhotos"),
+        needsMoreInformation: booleanValue(value.needsMoreInformation, "needsMoreInformation"),
         confidenceLevel: confidence(value.confidenceLevel),
         analysisLanguage: language(value.analysisLanguage),
         sourceReferences: sourceArray(value.sourceReferences)
@@ -75,6 +76,11 @@ function language(value) {
 function confidence(value) {
     if (typeof value !== "number" || value < 0 || value > 1)
         throw new Error("invalid_confidenceLevel");
+    return value;
+}
+function booleanValue(value, field) {
+    if (typeof value !== "boolean")
+        throw new Error(`invalid_${field}`);
     return value;
 }
 function checkArray(value) {

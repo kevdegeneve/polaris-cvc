@@ -13,6 +13,7 @@ const openAiApiKey = defineSecret("OPENAI_API_KEY");
 const db = getFirestore();
 const allowedMimeTypes = ["image/jpeg", "image/png", "image/webp"];
 const maxImageSize = 10 * 1024 * 1024;
+const openAiTimeoutMs = 75_000;
 const diagnosticResponseFormat = {
     type: "json_schema",
     json_schema: {
@@ -37,6 +38,7 @@ const diagnosticResponseFormat = {
                 "suggestedSolutions",
                 "missingInformation",
                 "recommendedAdditionalPhotos",
+                "needsMoreInformation",
                 "confidenceLevel",
                 "analysisLanguage",
                 "sourceReferences"
@@ -87,6 +89,7 @@ const diagnosticResponseFormat = {
                 suggestedSolutions: { type: "array", items: { type: "string" } },
                 missingInformation: { type: "array", items: { type: "string" } },
                 recommendedAdditionalPhotos: { type: "array", items: { type: "string" } },
+                needsMoreInformation: { type: "boolean" },
                 confidenceLevel: { type: "number", minimum: 0, maximum: 1 },
                 analysisLanguage: { type: "string", enum: ["fr", "en", "de", "it", "es"] },
                 sourceReferences: {
@@ -171,7 +174,9 @@ export const analyzeDiagnostic = onCall({
         assertDiagnosticAccess(diagnostic, user, uid);
         const photos = (await photosQuery.get()).docs.map((doc) => ({ id: doc.id, ...doc.data() }));
         const usablePhotos = selectUsablePhotos(photos, diagnosticId);
+        console.info("diagnostic_storage_read_started", { diagnosticId, imageCount: usablePhotos.length });
         const loadedPhotos = await Promise.all(usablePhotos.map(loadPhoto));
+        console.info("diagnostic_storage_read_completed", { diagnosticId, imageCount: loadedPhotos.length });
         const photoSignature = createHash("sha256")
             .update(loadedPhotos.map((photo) => `${photo.path}:${photo.hash}`).join("|"))
             .update(DIAGNOSTIC_PROMPT_VERSION)
@@ -180,15 +185,18 @@ export const analyzeDiagnostic = onCall({
             throw new HttpsError("already-exists", "Ces photos ont deja ete analysees avec cette version du prompt.");
         }
         const language = isPreferredLanguage(user.preferredLanguage) ? user.preferredLanguage : "fr";
+        console.info("diagnostic_openai_started", { diagnosticId, imageCount: loadedPhotos.length, model: DIAGNOSTIC_MODEL });
         const result = await analyzeWithOpenAI(loadedPhotos, language);
+        console.info("diagnostic_openai_completed", { diagnosticId, confidenceLevel: result.confidenceLevel, needsMoreInformation: result.needsMoreInformation });
         const finalResult = {
-            ...result,
+            ...normalizeInformationNeeds(result),
             analyzedAt: new Date().toISOString(),
             modelUsed: DIAGNOSTIC_MODEL,
             promptVersion: DIAGNOSTIC_PROMPT_VERSION,
             sourceReferences: result.sourceReferences || []
         };
         const validated = validateDiagnosticAIResult(finalResult);
+        console.info("diagnostic_response_validated", { diagnosticId, confidenceLevel: validated.confidenceLevel });
         const technicalMemoryInsight = await safelyBuildTechnicalMemoryInsight(diagnostic, validated, language);
         const title = buildArchiveTitle(validated);
         await diagnosticRef.set(removeUndefinedFields({
@@ -218,6 +226,7 @@ export const analyzeDiagnostic = onCall({
             updatedAt: new Date().toISOString()
         }), { merge: true });
         await Promise.all(usablePhotos.map((photo) => db.collection("diagnosticPhotos").doc(photo.id).set({ analysisStatus: "analyzed", updatedAt: new Date().toISOString() }, { merge: true })));
+        console.info("diagnostic_result_saved", { diagnosticId, needsMoreInformation: validated.needsMoreInformation });
         console.info("diagnostic_analysis_completed", {
             diagnosticId,
             uid: uid.slice(0, 8),
@@ -248,6 +257,7 @@ export const analyzeDiagnostic = onCall({
         if (error instanceof HttpsError)
             throw error;
         console.error("diagnostic_analysis_failed", { diagnosticId, uid: uid.slice(0, 8), code: error instanceof Error ? error.message : "unknown" });
+        console.error("diagnostic_failed", { diagnosticId, uid: uid.slice(0, 8), code: error instanceof Error ? error.message : "unknown" });
         throw new HttpsError("internal", "Analyse impossible pour le moment.");
     }
 });
@@ -532,7 +542,7 @@ async function analyzeWithOpenAI(photos, language) {
     if (!apiKey)
         throw new HttpsError("failed-precondition", "Secret OPENAI_API_KEY absent.");
     const client = new OpenAI({ apiKey });
-    const response = await client.chat.completions.create({
+    const response = await withTimeout(client.chat.completions.create({
         model: DIAGNOSTIC_MODEL,
         response_format: diagnosticResponseFormat,
         messages: [
@@ -542,7 +552,7 @@ async function analyzeWithOpenAI(photos, language) {
                 content: [
                     {
                         type: "text",
-                        text: "Analyze all available HVAC diagnostic images. Some expected views may be missing. Do not invent unreadable references or error codes. Return a diagnostic with uncertainty and recommended additional photos when needed. Return strict JSON only."
+                        text: "Analyze all available HVAC diagnostic images. If information is insufficient, return quickly with needsMoreInformation true, missingInformation and recommendedAdditionalPhotos. Do not invent unreadable references or error codes. Return concise strict JSON only."
                     },
                     ...photos.map((photo) => ({
                         type: "image_url",
@@ -551,9 +561,32 @@ async function analyzeWithOpenAI(photos, language) {
                 ]
             }
         ]
-    });
+    }), openAiTimeoutMs, new HttpsError("deadline-exceeded", "OpenAI trop lent. Relancez le diagnostic ou ajoutez une photo plus lisible."));
     const content = response.choices[0]?.message?.content;
     if (!content)
         throw new Error("empty_openai_response");
     return validateOpenAIDiagnosticPayload(JSON.parse(content));
+}
+function normalizeInformationNeeds(result) {
+    if (result.needsMoreInformation || result.confidenceLevel > 0.45)
+        return result;
+    return {
+        ...result,
+        needsMoreInformation: true,
+        recommendedAdditionalPhotos: result.recommendedAdditionalPhotos.length > 0
+            ? result.recommendedAdditionalPhotos
+            : ["Plaque signaletique complete", "Ecran affichant le code erreur", "Vue generale de l'installation"]
+    };
+}
+function withTimeout(promise, timeoutMs, error) {
+    return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(error), timeoutMs);
+        promise.then((value) => {
+            clearTimeout(timeout);
+            resolve(value);
+        }, (reason) => {
+            clearTimeout(timeout);
+            reject(reason);
+        });
+    });
 }

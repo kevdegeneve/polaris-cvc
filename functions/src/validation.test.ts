@@ -18,6 +18,7 @@ const validResult = {
   suggestedSolutions: [],
   missingInformation: ["Plaque illisible"],
   recommendedAdditionalPhotos: ["Plaque signaletique complete"],
+  needsMoreInformation: true,
   confidenceLevel: 0.4,
   analysisLanguage: "fr",
   sourceReferences: [],
@@ -37,6 +38,12 @@ describe("diagnostic analysis validation", () => {
   it("requires structured additional photo recommendations", () => {
     expect(() => validateOpenAIDiagnosticPayload({ ...validResult, recommendedAdditionalPhotos: undefined })).toThrow(
       "invalid_recommendedAdditionalPhotos"
+    );
+  });
+
+  it("requires an explicit needsMoreInformation flag", () => {
+    expect(() => validateOpenAIDiagnosticPayload({ ...validResult, needsMoreInformation: undefined })).toThrow(
+      "invalid_needsMoreInformation"
     );
   });
 

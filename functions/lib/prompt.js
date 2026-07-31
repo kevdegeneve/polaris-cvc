@@ -11,7 +11,8 @@ export function buildDiagnosticPrompt(language) {
         "Use null when a value cannot be identified reliably.",
         "Use an empty array when a list has no reliable item.",
         "Clearly list uncertain or missing information in missingInformation.",
-        "When confidence is insufficient, list useful complementary photos in recommendedAdditionalPhotos.",
+        "When confidence is insufficient, set needsMoreInformation to true and list useful complementary photos in recommendedAdditionalPhotos.",
+        "Keep the JSON concise. Prefer short arrays and direct field values over long explanations.",
         "Separate visible facts from probable interpretations and recommended checks.",
         "Do not claim certainty without evidence.",
         "Include electrical, refrigeration and mechanical safety warnings when relevant.",
@@ -52,6 +53,7 @@ export function buildDiagnosticPrompt(language) {
             suggestedSolutions: [],
             missingInformation: [],
             recommendedAdditionalPhotos: [],
+            needsMoreInformation: false,
             confidenceLevel: 0.0,
             analysisLanguage: language,
             sourceReferences: []

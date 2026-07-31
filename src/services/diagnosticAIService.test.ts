@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NotConnectedDiagnosticAIService } from "./diagnosticAIService";
+import { NotConnectedDiagnosticAIService, withTimeout } from "./diagnosticAIService";
 
 describe("NotConnectedDiagnosticAIService", () => {
   it("clearly reports that AI is unavailable and does not return fake diagnostics", async () => {
@@ -14,5 +14,9 @@ describe("NotConnectedDiagnosticAIService", () => {
     expect(result.status).toBe("not_connected");
     expect(result.analysis).toBeUndefined();
     expect(result.message).toContain("pas encore connectee");
+  });
+
+  it("fails callable waits after the configured timeout", async () => {
+    await expect(withTimeout(new Promise(() => undefined), 1, "timeout diagnostic")).rejects.toThrow("timeout diagnostic");
   });
 });

@@ -325,6 +325,7 @@ export interface DiagnosticAIResult {
   suggestedSolutions: string[];
   missingInformation: string[];
   recommendedAdditionalPhotos: string[];
+  needsMoreInformation: boolean;
   confidenceLevel: number;
   analysisLanguage: UserPreferredLanguage;
   sourceReferences: SourceReference[];

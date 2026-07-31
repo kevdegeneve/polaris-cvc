@@ -2,6 +2,8 @@ import type { AIAnalysisRequest, AIAnalysisResponse } from "../domain/types";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { createFirebaseServices } from "./firebaseClient";
 
+export const diagnosticFunctionTimeoutMs = 90_000;
+
 export interface DiagnosticAIService {
   isAvailable(): boolean;
   analyzeInitialPhotos(request: AIAnalysisRequest): Promise<AIAnalysisResponse>;
@@ -60,7 +62,11 @@ export class FirebaseDiagnosticAIService implements DiagnosticAIService {
     const firebase = createFirebaseServices();
     if (!firebase) return notConnectedResponse;
     const callable = httpsCallable<{ diagnosticId: string }, AIAnalysisResponse>(getFunctions(firebase.app, "europe-west1"), "analyzeDiagnostic");
-    const result = await callable({ diagnosticId: request.diagnosticId });
+    const result = await withTimeout(
+      callable({ diagnosticId: request.diagnosticId }),
+      diagnosticFunctionTimeoutMs,
+      "L'analyse IA depasse 90 secondes. Polaris a arrete l'attente pour eviter un chargement infini."
+    );
     return result.data;
   }
 
@@ -86,3 +92,19 @@ export class FirebaseDiagnosticAIService implements DiagnosticAIService {
 }
 
 export const diagnosticAIService: DiagnosticAIService = new FirebaseDiagnosticAIService();
+
+export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      }
+    );
+  });
+}

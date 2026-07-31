@@ -114,6 +114,7 @@ function createDiagnostic(overrides: Partial<Diagnostic> = {}): Diagnostic {
       suggestedSolutions: [],
       missingInformation: [],
       recommendedAdditionalPhotos: [],
+      needsMoreInformation: false,
       confidenceLevel: 0.7,
       analysisLanguage: "fr",
       sourceReferences: [],
