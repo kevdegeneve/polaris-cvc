@@ -167,6 +167,11 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    match /diagnosticDebugRuns/{runId} {
+      allow read: if isAdmin() && sameCompany(resource.data.companyId);
+      allow create, update, delete: if false;
+    }
+
     match /diagnosticDocumentLinks/{linkId} {
       allow read: if sameCompany(resource.data.companyId);
       allow create: if hasRequiredCompanyId() && sameCompany(request.resource.data.companyId);

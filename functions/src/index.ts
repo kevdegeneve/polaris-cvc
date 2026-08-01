@@ -2,8 +2,9 @@ import { initializeApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
-import { defineSecret } from "firebase-functions/params";
+import { defineSecret, defineString } from "firebase-functions/params";
 import OpenAI from "openai";
+import type { ChatCompletionCreateParamsNonStreaming } from "openai/resources/chat/completions";
 import { createHash } from "node:crypto";
 import { DIAGNOSTIC_MODEL, DIAGNOSTIC_PROMPT_VERSION, buildDiagnosticPrompt } from "./prompt.js";
 import { buildArchiveTitle } from "./result.js";
@@ -21,10 +22,13 @@ import { isPreferredLanguage, removeUndefinedFields, validateDiagnosticAIResult,
 initializeApp();
 
 const openAiApiKey = defineSecret("OPENAI_API_KEY");
+const diagnosticDebugEnabled = defineString("DIAGNOSTIC_DEBUG_ENABLED", { default: "false" });
 const db = getFirestore();
 const allowedMimeTypes = ["image/jpeg", "image/png", "image/webp"];
 const maxImageSize = 10 * 1024 * 1024;
 const openAiTimeoutMs = 75_000;
+const debugRawResponseMaxLength = 20_000;
+const debugRetentionMs = 7 * 24 * 60 * 60 * 1000;
 const diagnosticResponseFormat = {
   type: "json_schema" as const,
   json_schema: {
@@ -145,6 +149,34 @@ const diagnosticResponseFormat = {
   }
 };
 
+interface LoadedDiagnosticPhoto {
+  path: string;
+  mimeType: string;
+  base64: string;
+  hash: string;
+  byteLength: number;
+}
+
+interface DiagnosticDebugRun {
+  diagnosticId: string;
+  uid: string;
+  companyId?: string;
+  model: string;
+  promptVersion: string;
+  imageInputs: Array<{
+    path: string;
+    mimeType: string;
+    byteLength: number;
+  }>;
+  timingsMs: Record<string, number>;
+  rawResponseTruncated?: string;
+  errorCode?: string;
+  finalDetectedBrand?: string | null;
+  finalDetectedModel?: string | null;
+  finalDetectedErrorCode?: string | null;
+  status: "started" | "completed" | "failed";
+}
+
 export const analyzeDiagnostic = onCall(
   {
     region: "europe-west1",
@@ -161,8 +193,19 @@ export const analyzeDiagnostic = onCall(
     await readActiveAuthorization(user);
     const diagnosticRef = db.collection("diagnostics").doc(diagnosticId);
     const photosQuery = db.collection("diagnosticPhotos").where("diagnosticId", "==", diagnosticId);
+    const timingsMs: Record<string, number> = {};
+    let debugRun: DiagnosticDebugRun = {
+      diagnosticId,
+      uid,
+      companyId: user.companyId,
+      model: DIAGNOSTIC_MODEL,
+      promptVersion: DIAGNOSTIC_PROMPT_VERSION,
+      imageInputs: [],
+      timingsMs,
+      status: "started"
+    };
 
-    await db.runTransaction(async (transaction) => {
+    await measureStep(timingsMs, "firestore_lock", async () => db.runTransaction(async (transaction) => {
       const diagnosticSnap = await transaction.get(diagnosticRef);
       if (!diagnosticSnap.exists) throw new HttpsError("not-found", "Diagnostic introuvable.");
       const diagnostic = { id: diagnosticSnap.id, ...diagnosticSnap.data() } as DiagnosticRecord;
@@ -179,16 +222,25 @@ export const analyzeDiagnostic = onCall(
         analysisAttemptCount: (diagnostic.analysisAttemptCount || 0) + 1,
         updatedAt: new Date().toISOString()
       });
-    });
+    }));
 
     try {
-      const diagnosticSnap = await diagnosticRef.get();
+      const diagnosticSnap = await measureStep(timingsMs, "firestore_read_diagnostic", () => diagnosticRef.get());
       const diagnostic = { id: diagnosticSnap.id, ...diagnosticSnap.data() } as DiagnosticRecord;
       assertDiagnosticAccess(diagnostic, user, uid);
-      const photos = (await photosQuery.get()).docs.map((doc) => ({ id: doc.id, ...doc.data() }) as DiagnosticPhotoRecord);
+      const photosSnapshot = await measureStep(timingsMs, "firestore_read_photos", () => photosQuery.get());
+      const photos = photosSnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }) as DiagnosticPhotoRecord);
       const usablePhotos = selectUsablePhotos(photos, diagnosticId);
       console.info("diagnostic_storage_read_started", { diagnosticId, imageCount: usablePhotos.length });
-      const loadedPhotos = await Promise.all(usablePhotos.map(loadPhoto));
+      const loadedPhotos = await measureStep(timingsMs, "storage_load_images", () => Promise.all(usablePhotos.map(loadPhoto)));
+      debugRun = {
+        ...debugRun,
+        imageInputs: loadedPhotos.map((photo) => ({
+          path: photo.path,
+          mimeType: photo.mimeType,
+          byteLength: photo.byteLength
+        }))
+      };
       console.info("diagnostic_storage_read_completed", { diagnosticId, imageCount: loadedPhotos.length });
       const photoSignature = createHash("sha256")
         .update(loadedPhotos.map((photo) => `${photo.path}:${photo.hash}`).join("|"))
@@ -201,7 +253,12 @@ export const analyzeDiagnostic = onCall(
 
       const language = isPreferredLanguage(user.preferredLanguage) ? user.preferredLanguage : "fr";
       console.info("diagnostic_openai_started", { diagnosticId, imageCount: loadedPhotos.length, model: DIAGNOSTIC_MODEL });
-      const result = await analyzeWithOpenAI(loadedPhotos, language);
+      const openAiDebug = await measureStep(timingsMs, "openai_call", () => analyzeWithOpenAI(loadedPhotos, language));
+      debugRun = {
+        ...debugRun,
+        rawResponseTruncated: truncateForDebug(openAiDebug.rawContent)
+      };
+      const result = openAiDebug.parsed;
       console.info("diagnostic_openai_completed", { diagnosticId, confidenceLevel: result.confidenceLevel, needsMoreInformation: result.needsMoreInformation });
       const finalResult: DiagnosticAIResult = {
         ...normalizeInformationNeeds(result),
@@ -210,12 +267,18 @@ export const analyzeDiagnostic = onCall(
         promptVersion: DIAGNOSTIC_PROMPT_VERSION,
         sourceReferences: result.sourceReferences || []
       };
-      const validated = validateDiagnosticAIResult(finalResult);
+      const validated = measureSyncStep(timingsMs, "validation_json", () => validateDiagnosticAIResult(finalResult));
+      debugRun = {
+        ...debugRun,
+        finalDetectedBrand: validated.detectedBrand,
+        finalDetectedModel: validated.detectedModel,
+        finalDetectedErrorCode: validated.detectedErrorCode
+      };
       console.info("diagnostic_response_validated", { diagnosticId, confidenceLevel: validated.confidenceLevel });
-      const technicalMemoryInsight = await safelyBuildTechnicalMemoryInsight(diagnostic, validated, language);
+      const technicalMemoryInsight = await measureStep(timingsMs, "technical_memory", () => safelyBuildTechnicalMemoryInsight(diagnostic, validated, language));
       const title = buildArchiveTitle(validated);
 
-      await diagnosticRef.set(
+      await measureStep(timingsMs, "firestore_write_result", () => diagnosticRef.set(
         removeUndefinedFields({
           title,
           status: "awaiting_technician_input",
@@ -243,9 +306,10 @@ export const analyzeDiagnostic = onCall(
           updatedAt: new Date().toISOString()
         }),
         { merge: true }
-      );
+      ));
 
-      await Promise.all(usablePhotos.map((photo) => db.collection("diagnosticPhotos").doc(photo.id).set({ analysisStatus: "analyzed", updatedAt: new Date().toISOString() }, { merge: true })));
+      await measureStep(timingsMs, "firestore_write_photo_status", () => Promise.all(usablePhotos.map((photo) => db.collection("diagnosticPhotos").doc(photo.id).set({ analysisStatus: "analyzed", updatedAt: new Date().toISOString() }, { merge: true }))));
+      await writeDiagnosticDebugRun({ ...debugRun, timingsMs, status: "completed" });
       console.info("diagnostic_result_saved", { diagnosticId, needsMoreInformation: validated.needsMoreInformation });
 
       console.info("diagnostic_analysis_completed", {
@@ -270,6 +334,12 @@ export const analyzeDiagnostic = onCall(
         }
       };
     } catch (error) {
+      await writeDiagnosticDebugRun({
+        ...debugRun,
+        timingsMs,
+        errorCode: error instanceof HttpsError ? error.code : error instanceof Error ? error.message : "unknown",
+        status: "failed"
+      });
       await diagnosticRef.set(
         {
           status: "analysis_failed",
@@ -572,7 +642,7 @@ function selectUsablePhotos(photos: DiagnosticPhotoRecord[], diagnosticId: strin
   return usablePhotos;
 }
 
-async function loadPhoto(photo: DiagnosticPhotoRecord): Promise<{ path: string; mimeType: string; base64: string; hash: string }> {
+async function loadPhoto(photo: DiagnosticPhotoRecord): Promise<LoadedDiagnosticPhoto> {
   const file = getStorage().bucket().file(photo.storagePath);
   const [exists] = await file.exists();
   if (!exists) throw new HttpsError("not-found", "Fichier image introuvable.");
@@ -584,44 +654,61 @@ async function loadPhoto(photo: DiagnosticPhotoRecord): Promise<{ path: string; 
     path: photo.storagePath,
     mimeType: String(metadata.contentType),
     base64: buffer.toString("base64"),
-    hash: createHash("sha256").update(buffer).digest("hex")
+    hash: createHash("sha256").update(buffer).digest("hex"),
+    byteLength: buffer.byteLength
   };
 }
 
 async function analyzeWithOpenAI(
-  photos: Array<{ mimeType: string; base64: string }>,
+  photos: LoadedDiagnosticPhoto[],
   language: UserProfileRecord["preferredLanguage"]
-): Promise<OpenAIDiagnosticPayload> {
+): Promise<{ payload: ChatCompletionCreateParamsNonStreaming; rawContent: string; parsed: OpenAIDiagnosticPayload }> {
   const apiKey = openAiApiKey.value();
   if (!apiKey) throw new HttpsError("failed-precondition", "Secret OPENAI_API_KEY absent.");
   const client = new OpenAI({ apiKey });
+  const payload = buildOpenAIDiagnosticRequest(photos, language || "fr");
   const response = await withTimeout(
-    client.chat.completions.create({
-      model: DIAGNOSTIC_MODEL,
-      response_format: diagnosticResponseFormat,
-      messages: [
-        { role: "system", content: buildDiagnosticPrompt(language || "fr") },
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: "Analyze all available HVAC diagnostic images. If information is insufficient, return quickly with needsMoreInformation true, missingInformation and recommendedAdditionalPhotos. Do not invent unreadable references or error codes. Return concise strict JSON only."
-            },
-            ...photos.map((photo) => ({
-              type: "image_url" as const,
-              image_url: { url: `data:${photo.mimeType};base64,${photo.base64}` }
-            }))
-          ]
-        }
-      ]
-    }),
+    client.chat.completions.create(payload),
     openAiTimeoutMs,
     new HttpsError("deadline-exceeded", "OpenAI trop lent. Relancez le diagnostic ou ajoutez une photo plus lisible.")
   );
   const content = response.choices[0]?.message?.content;
   if (!content) throw new Error("empty_openai_response");
-  return validateOpenAIDiagnosticPayload(JSON.parse(content) as unknown);
+  return {
+    payload,
+    rawContent: content,
+    parsed: validateOpenAIDiagnosticPayload(JSON.parse(content) as unknown)
+  };
+}
+
+export function buildOpenAIDiagnosticRequest(
+  photos: Array<Pick<LoadedDiagnosticPhoto, "mimeType" | "base64">>,
+  language: UserProfileRecord["preferredLanguage"]
+): ChatCompletionCreateParamsNonStreaming {
+  return {
+    model: DIAGNOSTIC_MODEL,
+    response_format: diagnosticResponseFormat,
+    messages: [
+      { role: "system", content: buildDiagnosticPrompt(language || "fr") },
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Analyze all available HVAC diagnostic images. If information is insufficient, return quickly with needsMoreInformation true, missingInformation and recommendedAdditionalPhotos. Do not invent unreadable references or error codes. Return concise strict JSON only."
+          },
+          ...photos.map((photo) => ({
+            type: "image_url" as const,
+            image_url: { url: `data:${photo.mimeType};base64,${photo.base64}`, detail: "high" as const }
+          }))
+        ]
+      }
+    ]
+  };
+}
+
+export function parseOpenAIDiagnosticRawResponse(rawContent: string): OpenAIDiagnosticPayload {
+  return validateOpenAIDiagnosticPayload(JSON.parse(rawContent) as unknown);
 }
 
 function normalizeInformationNeeds(result: OpenAIDiagnosticPayload): OpenAIDiagnosticPayload {
@@ -649,4 +736,62 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, error: HttpsErro
       }
     );
   });
+}
+
+async function measureStep<T>(timingsMs: Record<string, number>, name: string, run: () => Promise<T>): Promise<T> {
+  const startedAt = Date.now();
+  try {
+    return await run();
+  } finally {
+    timingsMs[name] = Date.now() - startedAt;
+  }
+}
+
+function measureSyncStep<T>(timingsMs: Record<string, number>, name: string, run: () => T): T {
+  const startedAt = Date.now();
+  try {
+    return run();
+  } finally {
+    timingsMs[name] = Date.now() - startedAt;
+  }
+}
+
+async function writeDiagnosticDebugRun(run: DiagnosticDebugRun): Promise<void> {
+  if (!isDiagnosticDebugEnabled()) return;
+  try {
+    const id = `${run.diagnosticId}-${Date.now()}`;
+    const ref = db.collection("diagnosticDebugRuns").doc(id);
+    await ref.set(
+      removeUndefinedFields({
+        diagnosticId: run.diagnosticId,
+        companyId: run.companyId,
+        model: run.model,
+        promptVersion: run.promptVersion,
+        imageInputs: run.imageInputs,
+        timingsMs: run.timingsMs,
+        status: run.status,
+        errorCode: run.errorCode,
+        finalDetectedBrand: run.finalDetectedBrand,
+        finalDetectedModel: run.finalDetectedModel,
+        finalDetectedErrorCode: run.finalDetectedErrorCode,
+        rawResponseTruncated: run.rawResponseTruncated,
+        rawResponseTruncatedLength: run.rawResponseTruncated?.length,
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + debugRetentionMs)
+      })
+    );
+  } catch (error) {
+    console.warn("diagnostic_debug_write_failed", {
+      diagnosticId: run.diagnosticId,
+      error: error instanceof Error ? error.message : "unknown"
+    });
+  }
+}
+
+function isDiagnosticDebugEnabled(): boolean {
+  return diagnosticDebugEnabled.value().trim().toLowerCase() === "true";
+}
+
+export function truncateForDebug(value: string): string {
+  return value.length > debugRawResponseMaxLength ? value.slice(0, debugRawResponseMaxLength) : value;
 }
