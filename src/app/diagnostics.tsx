@@ -5,6 +5,7 @@ import type {
   AppUser,
   Diagnostic,
   DiagnosticAIResult,
+  DiagnosticLaunchStage,
   DiagnosticMessage,
   DiagnosticPhoto,
   DiagnosticPhotoCategory,
@@ -19,6 +20,7 @@ import {
   canStartDiagnostic,
   createDiagnosticArchiveTitle,
   createDiagnosticDraft,
+  createDiagnosticLaunchError,
   createDiagnosticPhoto,
   createSystemDiagnosticMessage,
   getDiagnosticStatus
@@ -154,6 +156,7 @@ export function DiagnosticStartView({
   const [photos, setPhotos] = useState<LocalDiagnosticPhoto[]>([]);
   const [isAnalyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState("");
+  const [lastLaunchError, setLastLaunchError] = useState<Diagnostic["lastError"] | null>(null);
   const [conversation, setConversation] = useState<DiagnosticMessage[]>([]);
   const [preparedDiagnostic, setPreparedDiagnostic] = useState<Diagnostic | null>(null);
   const [preparedPhotos, setPreparedPhotos] = useState<DiagnosticPhoto[]>([]);
@@ -210,9 +213,10 @@ export function DiagnosticStartView({
 
   async function startAnalysis() {
     if (!canAnalyze || isAnalyzing || !aiAvailable) return;
-    logDiagnosticEvent("diagnostic_upload_started", { photoCount: photos.length });
+    logDiagnosticEvent("diagnostic_click_received", { photoCount: photos.length, retryDiagnosticId: preparedDiagnostic?.status === "analysis_failed" ? preparedDiagnostic.id : undefined });
     setAnalyzing(true);
     setError("");
+    setLastLaunchError(null);
     setSlowAnalysisWarning("");
     setAnalysisResult(null);
     setUploadProgress({});
@@ -224,25 +228,41 @@ export function DiagnosticStartView({
     let slowTimer: number | undefined;
     const stageTimers: number[] = [];
     let currentStep: DiagnosticWorkflowStep = "preparing_photo";
+    let currentStage: DiagnosticLaunchStage | string = "diagnostic_click_received";
     const moveToStep = (step: DiagnosticWorkflowStep) => {
       currentStep = step;
       setWorkflowStep(step);
     };
+    const moveToStage = (stage: DiagnosticLaunchStage, details: Record<string, unknown> = {}) => {
+      currentStage = stage;
+      logDiagnosticEvent(stage, {
+        diagnosticId: latestDiagnostic?.id,
+        ...details
+      });
+    };
     try {
       const preparedLocalPhotos: LocalDiagnosticPhoto[] = [];
       for (const photo of photos) {
-        logDiagnosticEvent("diagnostic_image_preparation_started", { localPhotoId: photo.id, size: photo.file.size, type: photo.file.type });
+        moveToStage("image_preparation_started", { localPhotoId: photo.id, size: photo.file.size, type: photo.file.type });
         const preparedFile = await prepareDiagnosticImage(photo.file);
-        logDiagnosticEvent("diagnostic_image_preparation_completed", { localPhotoId: photo.id, originalSize: photo.file.size, preparedSize: preparedFile.size, type: preparedFile.type });
+        moveToStage("image_preparation_completed", { localPhotoId: photo.id, originalSize: photo.file.size, preparedSize: preparedFile.size, type: preparedFile.type });
         preparedLocalPhotos.push({ ...photo, file: preparedFile });
       }
       moveToStep("firestore_ready");
-      const diagnostic = createDiagnosticDraft({
-        companyId: data.company.id,
-        technicianId: user.id,
-        technicianName: user.displayName,
-        preferredLanguage: user.preferredLanguage || "fr"
-      });
+      const diagnostic = preparedDiagnostic?.status === "analysis_failed"
+        ? {
+            ...preparedDiagnostic,
+            status: "draft" as const,
+            analysisError: undefined,
+            lastError: undefined,
+            updatedAt: new Date().toISOString()
+          }
+        : createDiagnosticDraft({
+            companyId: data.company.id,
+            technicianId: user.id,
+            technicianName: user.displayName,
+            preferredLanguage: user.preferredLanguage || "fr"
+          });
       const diagnosticPhotos = preparedLocalPhotos.map((photo) =>
         createDiagnosticPhoto({
           diagnosticId: diagnostic.id,
@@ -260,18 +280,24 @@ export function DiagnosticStartView({
         updatedAt: new Date().toISOString()
       };
       latestDiagnostic = uploadingDiagnostic;
-      latestPhotos = diagnosticPhotos;
-      await onSave(uploadingDiagnostic, diagnosticPhotos, []);
-      logDiagnosticEvent("diagnostic_firestore_ready", { diagnosticId: diagnostic.id, photoCount: diagnosticPhotos.length });
+      latestPhotos = [];
+      moveToStage("diagnostic_created", { diagnosticId: diagnostic.id, photoCount: diagnosticPhotos.length });
+      await onSave({ ...uploadingDiagnostic, mainPhotoId: undefined, photoIds: [] }, [], []);
       moveToStep("uploading");
       const uploadedPhotos = await Promise.all(
         diagnosticPhotos.map(async (photo, index) => {
           setUploadProgress((current) => ({ ...current, [photo.id]: current[photo.id] ?? 1 }));
+          moveToStage("storage_upload_started", { diagnosticId: diagnostic.id, photoId: photo.id, storagePath: photo.storagePath });
           const uploaded = await uploadDiagnosticPhoto(photo, preparedLocalPhotos[index].file, (progress: DiagnosticUploadProgress) => {
-            logDiagnosticEvent("diagnostic_upload_progress", { photoId: progress.photoId, progress: progress.progress });
+            logDiagnosticEvent("diagnostic_upload_progress", { diagnosticId: diagnostic.id, photoId: progress.photoId, progress: progress.progress });
             setUploadProgress((current) => ({ ...current, [progress.photoId]: progress.progress }));
+          }, {
+            onEvent: (event, details) => {
+              if (event === "storage_upload_first_progress") moveToStage("storage_upload_first_progress", details);
+              else if (event === "storage_upload_completed") moveToStage("storage_upload_completed", details);
+              else logDiagnosticEvent(event, details);
+            }
           });
-          logDiagnosticEvent("diagnostic_upload_completed", { photoId: photo.id, storagePath: uploaded.storagePath });
           return {
             ...photo,
             ...uploaded,
@@ -280,6 +306,9 @@ export function DiagnosticStartView({
           };
         })
       );
+      latestPhotos = uploadedPhotos;
+      await onSave(uploadingDiagnostic, uploadedPhotos, []);
+      moveToStage("photo_metadata_saved", { diagnosticId: diagnostic.id, photoCount: uploadedPhotos.length });
       const readyDiagnostic: Diagnostic = {
         ...uploadingDiagnostic,
         status: "ready_for_analysis",
@@ -291,14 +320,14 @@ export function DiagnosticStartView({
       latestPhotos = uploadedPhotos;
       setWorkflowStatus("ready_for_analysis");
       await onSave(readyDiagnostic, uploadedPhotos, []);
-      logDiagnosticEvent("diagnostic_firestore_ready", { diagnosticId: diagnostic.id, status: "ready_for_analysis" });
+      moveToStage("diagnostic_ready_for_analysis", { diagnosticId: diagnostic.id });
       setWorkflowStatus("analyzing");
       moveToStep("function_called");
       slowTimer = window.setTimeout(() => {
         setSlowAnalysisWarning("L'analyse prend plus de temps que prevu. Polaris continue, mais vous pourrez reessayer si elle depasse le delai maximum.");
         logDiagnosticEvent("diagnostic_slow_warning", { diagnosticId: diagnostic.id, timeoutMs: 45_000 });
       }, 45_000);
-      logDiagnosticEvent("diagnostic_function_called", { diagnosticId: diagnostic.id });
+      moveToStage("callable_invocation_started", { diagnosticId: diagnostic.id, payload: { diagnosticId: diagnostic.id }, region: "europe-west1" });
       moveToStep("reading_image");
       stageTimers.push(window.setTimeout(() => moveToStep("searching_fault"), 5_000));
       stageTimers.push(window.setTimeout(() => moveToStep("technical_memory"), 18_000));
@@ -308,7 +337,7 @@ export function DiagnosticStartView({
       });
       if (slowTimer) window.clearTimeout(slowTimer);
       stageTimers.forEach((timer) => window.clearTimeout(timer));
-      logDiagnosticEvent("diagnostic_function_completed", { diagnosticId: diagnostic.id, status: aiResponse.status });
+      moveToStage("callable_invocation_completed", { diagnosticId: diagnostic.id, status: aiResponse.status });
       moveToStep("generating_diagnostic");
       if (aiResponse.status !== "completed" || !aiResponse.analysis?.result) {
         throw new Error(aiResponse.message || "Analyse impossible.");
@@ -369,21 +398,30 @@ export function DiagnosticStartView({
     } catch (analysisError) {
       if (slowTimer) window.clearTimeout(slowTimer);
       stageTimers.forEach((timer) => window.clearTimeout(timer));
-      const message = getDiagnosticErrorMessage(analysisError);
-      logDiagnosticEvent("diagnostic_failed", { step: currentStep, message });
+      const launchError = createDiagnosticLaunchError(currentStage, analysisError);
+      const message = getDiagnosticErrorMessage(analysisError, currentStage);
+      if (currentStage === "callable_invocation_started") {
+        moveToStage("callable_invocation_failed", { diagnosticId: latestDiagnostic?.id, code: launchError.code, message: launchError.message });
+      }
+      logDiagnosticEvent("diagnostic_failed", { diagnosticId: latestDiagnostic?.id, step: currentStep, stage: currentStage, code: launchError.code, message: launchError.message });
       setError(message);
+      setLastLaunchError(launchError);
       setSlowAnalysisWarning("");
       moveToStep("failed");
       setWorkflowStatus("analysis_failed");
       if (latestDiagnostic) {
         const timestamp = new Date().toISOString();
+        const failedDiagnostic: Diagnostic = {
+          ...latestDiagnostic,
+          status: "analysis_failed",
+          analysisError: message,
+          lastError: launchError,
+          updatedAt: timestamp
+        };
+        setPreparedDiagnostic(failedDiagnostic);
+        setPreparedPhotos(latestPhotos);
         await onSave(
-          {
-            ...latestDiagnostic,
-            status: "analysis_failed",
-            analysisError: message,
-            updatedAt: timestamp
-          },
+          failedDiagnostic,
           latestPhotos,
           latestMessages
         );
@@ -472,6 +510,7 @@ export function DiagnosticStartView({
       <DiagnosticProgress status={status} photoCount={photos.length} preferredLanguage={preferredLanguage} />
       <DiagnosticStepProgress step={workflowStep} uploadProgress={uploadProgress} />
       {error && <p className="auth-error">{error}</p>}
+      {lastLaunchError && <DiagnosticErrorPanel error={lastLaunchError} diagnosticId={preparedDiagnostic?.id} />}
       {slowAnalysisWarning && <p className="notice">{slowAnalysisWarning}</p>}
       <button className="primary large sticky-action" disabled={!canAnalyze || isAnalyzing || !aiAvailable} onClick={startAnalysis}>
         <CheckCircle2 size={22} /> Diagnostic
@@ -654,6 +693,16 @@ function DiagnosticStepProgress({ step, uploadProgress }: { step: DiagnosticWork
   );
 }
 
+function DiagnosticErrorPanel({ error, diagnosticId }: { error: NonNullable<Diagnostic["lastError"]>; diagnosticId?: string }) {
+  return (
+    <section className="error-box">
+      <strong>{getStageUserTitle(error.stage)}</strong>
+      <p>{error.message}</p>
+      <small>Etape : {error.stage} - Code : {error.code}{diagnosticId ? ` - Diagnostic : ${diagnosticId}` : ""}</small>
+    </section>
+  );
+}
+
 function DiagnosticResultView({
   result,
   language,
@@ -736,9 +785,13 @@ function logDiagnosticEvent(event: string, details: Record<string, unknown> = {}
   });
 }
 
-function getDiagnosticErrorMessage(error: unknown): string {
+function getDiagnosticErrorMessage(error: unknown, stage?: string): string {
   const rawMessage = error instanceof Error ? error.message : String(error || "");
   const message = rawMessage.toLowerCase();
+  if (stage === "image_preparation_started" || stage === "image_preparation_completed") return `Echec de preparation de la photo : ${rawMessage}`;
+  if (stage === "storage_upload_started" || stage === "storage_upload_first_progress") return `Echec du televersement : ${rawMessage}`;
+  if (stage === "photo_metadata_saved" || stage === "diagnostic_created" || stage === "diagnostic_ready_for_analysis") return `Impossible d'enregistrer la photo : ${rawMessage}`;
+  if (stage === "callable_invocation_started") return `Impossible de contacter l'IA Polaris : ${rawMessage}`;
   if (!navigator.onLine) return "Connexion Internet absente. Verifiez le reseau puis relancez le diagnostic.";
   if (message.includes("storage") || message.includes("televersement") || message.includes("upload")) return rawMessage;
   if (message.includes("permission") || message.includes("droits") || message.includes("unauthorized")) return "Droits insuffisants pour analyser ce diagnostic.";
@@ -748,6 +801,14 @@ function getDiagnosticErrorMessage(error: unknown): string {
   if (message.includes("type mime") || message.includes("format image")) return "Type d'image non pris en charge. Utilisez JPEG, PNG ou WebP.";
   if (message.includes("volumineuse") || message.includes("too large")) return "Fichier trop lourd. Ajoutez une image plus legere ou reprenez la photo.";
   return rawMessage || "Le diagnostic a echoue. Vous pouvez reessayer.";
+}
+
+function getStageUserTitle(stage: string): string {
+  if (stage.startsWith("image_preparation")) return "Echec de preparation de la photo";
+  if (stage.startsWith("storage_upload")) return "Echec du televersement";
+  if (["diagnostic_created", "photo_metadata_saved", "diagnostic_ready_for_analysis", "firestore_write_failed"].includes(stage)) return "Impossible d'enregistrer la photo";
+  if (stage.startsWith("callable_invocation")) return "Impossible de contacter l'IA Polaris";
+  return "Diagnostic interrompu";
 }
 
 function RequiredPhotoStep({

@@ -13,6 +13,11 @@ export interface DiagnosticUploadProgress {
   progress: number;
 }
 
+export interface DiagnosticUploadOptions {
+  timeoutMs?: number;
+  onEvent?: (event: string, details: Record<string, unknown>) => void;
+}
+
 export function validateDiagnosticImage(file: File): void {
   if (!allowedDiagnosticImageTypes.includes(file.type)) {
     throw new Error("Format image non autorise. Utilisez JPEG, PNG ou WebP.");
@@ -57,12 +62,20 @@ export async function prepareDiagnosticImage(file: File): Promise<File> {
 export async function uploadDiagnosticPhoto(
   photo: DiagnosticPhoto,
   file: File,
-  onProgress: (progress: DiagnosticUploadProgress) => void
+  onProgress: (progress: DiagnosticUploadProgress) => void,
+  options: DiagnosticUploadOptions = {}
 ): Promise<Pick<DiagnosticPhoto, "downloadUrl" | "storagePath">> {
   validateDiagnosticImage(file);
   const firebase = createFirebaseServices();
   if (!firebase) throw new Error("Firebase Storage n'est pas configure.");
 
+  const storageBucket = firebase.storage.app.options.storageBucket || "unknown";
+  options.onEvent?.("storage_upload_started", {
+    diagnosticId: photo.diagnosticId,
+    photoId: photo.id,
+    storagePath: photo.storagePath,
+    storageBucket
+  });
   const storageRef = ref(firebase.storage, photo.storagePath);
   const task = uploadBytesResumable(storageRef, file, {
     contentType: file.type,
@@ -74,32 +87,63 @@ export async function uploadDiagnosticPhoto(
   });
 
   return new Promise((resolve, reject) => {
+    let settled = false;
+    let firstProgressSeen = false;
+    let firebaseError: unknown;
     const timeout = window.setTimeout(() => {
+      if (settled) return;
       task.cancel();
-      reject(new Error("Le televersement de l'image a depasse 30 secondes. Verifiez la connexion Internet puis reessayez."));
-    }, diagnosticUploadTimeoutMs);
+      const timeoutError = Object.assign(
+        new Error(`Le televersement de l'image a depasse ${Math.round((options.timeoutMs || diagnosticUploadTimeoutMs) / 1000)} secondes. Verifiez la connexion Internet puis reessayez.`),
+        { code: "storage/timeout" }
+      );
+      if (firebaseError) {
+        reject(firebaseError);
+        return;
+      }
+      reject(timeoutError);
+    }, options.timeoutMs || diagnosticUploadTimeoutMs);
 
     task.on(
       "state_changed",
       (snapshot) => {
+        if (!firstProgressSeen) {
+          firstProgressSeen = true;
+          options.onEvent?.("storage_upload_first_progress", {
+            diagnosticId: photo.diagnosticId,
+            photoId: photo.id,
+            bytesTransferred: snapshot.bytesTransferred,
+            totalBytes: snapshot.totalBytes
+          });
+        }
         onProgress({
           photoId: photo.id,
           progress: Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100)
         });
       },
       (error) => {
+        settled = true;
+        firebaseError = error;
         window.clearTimeout(timeout);
         reject(error);
       },
       async () => {
         try {
           const downloadUrl = await getDownloadURL(task.snapshot.ref);
+          settled = true;
           window.clearTimeout(timeout);
+          options.onEvent?.("storage_upload_completed", {
+            diagnosticId: photo.diagnosticId,
+            photoId: photo.id,
+            storagePath: photo.storagePath
+          });
           resolve({
             storagePath: photo.storagePath,
             downloadUrl
           });
         } catch (error) {
+          settled = true;
+          firebaseError = error;
           window.clearTimeout(timeout);
           reject(error);
         }

@@ -37,6 +37,20 @@ export type DiagnosticPhotoCategory =
   | "composant"
   | "autre";
 export type DiagnosticMessageRole = "system" | "assistant" | "technician" | "source" | "observation" | "measurement";
+export type DiagnosticLaunchStage =
+  | "diagnostic_click_received"
+  | "diagnostic_created"
+  | "image_preparation_started"
+  | "image_preparation_completed"
+  | "storage_upload_started"
+  | "storage_upload_first_progress"
+  | "storage_upload_completed"
+  | "photo_metadata_saved"
+  | "diagnostic_ready_for_analysis"
+  | "callable_invocation_started"
+  | "callable_invocation_completed"
+  | "callable_invocation_failed"
+  | "firestore_write_failed";
 export type TechnicalDocumentStatus = "active" | "deprecated" | "superseded" | "hidden";
 export type TechnicalMemoryCause =
   | "sonde_defectueuse"
@@ -373,6 +387,12 @@ export interface Diagnostic extends CompanyScoped {
   promptVersion?: string;
   modelUsed?: string;
   analysisError?: string;
+  lastError?: {
+    stage: DiagnosticLaunchStage | string;
+    code: string;
+    message: string;
+    occurredAt: string;
+  };
   completedAt?: string;
   archivedAt?: string;
   createdBy: string;

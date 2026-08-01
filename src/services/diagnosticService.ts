@@ -1,5 +1,6 @@
 import type {
   Diagnostic,
+  DiagnosticLaunchStage,
   DiagnosticMessage,
   DiagnosticPhoto,
   DiagnosticPhotoCategory,
@@ -11,6 +12,39 @@ import type {
 export interface DiagnosticPhotoInput {
   file: File;
   category: DiagnosticPhotoCategory;
+}
+
+export interface DiagnosticLaunchError {
+  stage: DiagnosticLaunchStage | string;
+  code: string;
+  message: string;
+  occurredAt: string;
+}
+
+export function createDiagnosticLaunchError(stage: DiagnosticLaunchStage | string, error: unknown): DiagnosticLaunchError {
+  return {
+    stage,
+    code: readErrorCode(error),
+    message: readErrorMessage(error),
+    occurredAt: new Date().toISOString()
+  };
+}
+
+export function readErrorCode(error: unknown): string {
+  if (isRecord(error) && typeof error.code === "string") return error.code;
+  if (error instanceof DOMException && error.name) return error.name;
+  if (error instanceof Error && error.name && error.name !== "Error") return error.name;
+  return "unknown";
+}
+
+export function readErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message;
+  if (isRecord(error) && typeof error.message === "string") return error.message;
+  return "Erreur inconnue.";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 export function canStartDiagnostic(photos: Array<{ category: DiagnosticPhotoCategory }>): boolean {
