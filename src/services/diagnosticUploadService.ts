@@ -28,6 +28,10 @@ export function validateDiagnosticImage(file: File): void {
   }
 }
 
+export function isMeaningfulUploadProgress(bytesTransferred: number): boolean {
+  return bytesTransferred > 0;
+}
+
 export function getResizedDimensions(width: number, height: number, maxDimension = diagnosticImageMaxDimension): { width: number; height: number } {
   if (width <= maxDimension && height <= maxDimension) return { width, height };
   const ratio = Math.min(maxDimension / width, maxDimension / height);
@@ -137,7 +141,7 @@ export async function uploadDiagnosticPhoto(
       "state_changed",
       (snapshot) => {
         resetInactivityTimeout();
-        if (!firstProgressSeen) {
+        if (!firstProgressSeen && isMeaningfulUploadProgress(snapshot.bytesTransferred)) {
           firstProgressSeen = true;
           options.onEvent?.("storage_upload_first_progress", {
             diagnosticId: photo.diagnosticId,

@@ -286,7 +286,6 @@ export function DiagnosticStartView({
       moveToStep("uploading");
       const uploadedPhotos = await Promise.all(
         diagnosticPhotos.map(async (photo, index) => {
-          setUploadProgress((current) => ({ ...current, [photo.id]: current[photo.id] ?? 1 }));
           moveToStage("storage_upload_started", { diagnosticId: diagnostic.id, photoId: photo.id, storagePath: photo.storagePath });
           const uploaded = await uploadDiagnosticPhoto(photo, preparedLocalPhotos[index].file, (progress: DiagnosticUploadProgress) => {
             logDiagnosticEvent("diagnostic_upload_progress", { diagnosticId: diagnostic.id, photoId: progress.photoId, progress: progress.progress });
@@ -699,6 +698,7 @@ function DiagnosticErrorPanel({ error, diagnosticId }: { error: NonNullable<Diag
       <strong>{getStageUserTitle(error.stage)}</strong>
       <p>{error.message}</p>
       <small>Etape : {error.stage} - Code : {error.code}{diagnosticId ? ` - Diagnostic : ${diagnosticId}` : ""}</small>
+      {error.serverResponse && <small>Storage : {error.serverResponse}</small>}
     </section>
   );
 }

@@ -391,6 +391,7 @@ export interface Diagnostic extends CompanyScoped {
     stage: DiagnosticLaunchStage | string;
     code: string;
     message: string;
+    serverResponse?: string;
     occurredAt: string;
   };
   completedAt?: string;

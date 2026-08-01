@@ -6,3 +6,4 @@ dist/
 .DS_Store
 npm-debug.log*
 functions/node_modules/
+functions/.env.*

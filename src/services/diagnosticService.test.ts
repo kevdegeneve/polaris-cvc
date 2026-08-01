@@ -3,6 +3,7 @@ import {
   canStartDiagnostic,
   createDiagnosticArchiveTitle,
   createDiagnosticDraft,
+  createDiagnosticLaunchError,
   dedupeDocumentKey,
   getDiagnosticStatus
 } from "./diagnosticService";
@@ -55,5 +56,20 @@ describe("diagnosticService", () => {
         version: "2026"
       })
     ).toBe("abc|https://example.test/doc.pdf|daikin|ref-1|fr|2026");
+  });
+
+  it("preserves Firebase Storage error details", () => {
+    const error = createDiagnosticLaunchError("storage_upload_started", {
+      code: "storage/unauthorized",
+      message: "User does not have permission.",
+      serverResponse: "{\"error\":{\"code\":403}}"
+    });
+
+    expect(error).toMatchObject({
+      stage: "storage_upload_started",
+      code: "storage/unauthorized",
+      message: "User does not have permission.",
+      serverResponse: "{\"error\":{\"code\":403}}"
+    });
   });
 });

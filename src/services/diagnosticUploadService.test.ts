@@ -4,6 +4,7 @@ import {
   diagnosticUploadInactivityTimeoutMs,
   diagnosticUploadTimeoutMs,
   getResizedDimensions,
+  isMeaningfulUploadProgress,
   validateDiagnosticImage
 } from "./diagnosticUploadService";
 
@@ -28,5 +29,10 @@ describe("diagnosticUploadService", () => {
     expect(diagnosticUploadTimeoutMs).toBeGreaterThanOrEqual(180_000);
     expect(diagnosticUploadInactivityTimeoutMs).toBeGreaterThanOrEqual(45_000);
     expect(diagnosticUploadInactivityTimeoutMs).toBeLessThan(diagnosticUploadTimeoutMs);
+  });
+
+  it("does not treat zero transferred bytes as first real progress", () => {
+    expect(isMeaningfulUploadProgress(0)).toBe(false);
+    expect(isMeaningfulUploadProgress(1)).toBe(true);
   });
 });

@@ -18,6 +18,7 @@ export interface DiagnosticLaunchError {
   stage: DiagnosticLaunchStage | string;
   code: string;
   message: string;
+  serverResponse?: string;
   occurredAt: string;
 }
 
@@ -26,6 +27,7 @@ export function createDiagnosticLaunchError(stage: DiagnosticLaunchStage | strin
     stage,
     code: readErrorCode(error),
     message: readErrorMessage(error),
+    serverResponse: readServerResponse(error),
     occurredAt: new Date().toISOString()
   };
 }
@@ -41,6 +43,15 @@ export function readErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message) return error.message;
   if (isRecord(error) && typeof error.message === "string") return error.message;
   return "Erreur inconnue.";
+}
+
+export function readServerResponse(error: unknown): string | undefined {
+  if (isRecord(error) && typeof error.serverResponse === "string") return error.serverResponse;
+  if (isRecord(error) && typeof error.customData === "object" && error.customData !== null && "serverResponse" in error.customData) {
+    const customData = error.customData as Record<string, unknown>;
+    return typeof customData.serverResponse === "string" ? customData.serverResponse : undefined;
+  }
+  return undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
