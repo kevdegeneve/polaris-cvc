@@ -1,10 +1,11 @@
-import { getDownloadURL, ref, uploadBytesResumable } from "firebase/storage";
+import { ref, uploadBytesResumable } from "firebase/storage";
 import type { DiagnosticPhoto } from "../domain/types";
 import { createFirebaseServices } from "./firebaseClient";
 
 export const allowedDiagnosticImageTypes = ["image/jpeg", "image/png", "image/webp"];
 export const diagnosticImageMaxSize = 10 * 1024 * 1024;
-export const diagnosticUploadTimeoutMs = 30_000;
+export const diagnosticUploadTimeoutMs = 180_000;
+export const diagnosticUploadInactivityTimeoutMs = 45_000;
 export const diagnosticImageMaxDimension = 1800;
 export const diagnosticImageQuality = 0.86;
 
@@ -74,7 +75,13 @@ export async function uploadDiagnosticPhoto(
     diagnosticId: photo.diagnosticId,
     photoId: photo.id,
     storagePath: photo.storagePath,
-    storageBucket
+    storageBucket,
+    projectId: firebase.app.options.projectId || "unknown",
+    authUid: firebase.auth.currentUser?.uid || "anonymous",
+    uploadedBy: photo.uploadedBy,
+    companyId: photo.companyId,
+    mimeType: file.type,
+    size: file.size
   });
   const storageRef = ref(firebase.storage, photo.storagePath);
   const task = uploadBytesResumable(storageRef, file, {
@@ -90,23 +97,46 @@ export async function uploadDiagnosticPhoto(
     let settled = false;
     let firstProgressSeen = false;
     let firebaseError: unknown;
-    const timeout = window.setTimeout(() => {
+    const clearTimers = () => {
+      window.clearTimeout(totalTimeout);
+      window.clearTimeout(inactivityTimeout);
+    };
+    const failWithTimeout = (kind: "total" | "inactivity") => {
       if (settled) return;
+      settled = true;
       task.cancel();
       const timeoutError = Object.assign(
-        new Error(`Le televersement de l'image a depasse ${Math.round((options.timeoutMs || diagnosticUploadTimeoutMs) / 1000)} secondes. Verifiez la connexion Internet puis reessayez.`),
+        new Error(
+          kind === "inactivity"
+            ? "Le televersement de l'image n'a plus progresse. Verifiez la connexion Internet puis reessayez."
+            : `Le televersement de l'image a depasse ${Math.round((options.timeoutMs || diagnosticUploadTimeoutMs) / 1000)} secondes. Verifiez la connexion Internet puis reessayez.`
+        ),
         { code: "storage/timeout" }
       );
+      options.onEvent?.("storage_upload_timeout", {
+        diagnosticId: photo.diagnosticId,
+        photoId: photo.id,
+        kind,
+        storagePath: photo.storagePath
+      });
+      clearTimers();
       if (firebaseError) {
         reject(firebaseError);
         return;
       }
       reject(timeoutError);
-    }, options.timeoutMs || diagnosticUploadTimeoutMs);
+    };
+    const resetInactivityTimeout = () => {
+      window.clearTimeout(inactivityTimeout);
+      inactivityTimeout = window.setTimeout(() => failWithTimeout("inactivity"), diagnosticUploadInactivityTimeoutMs);
+    };
+    const totalTimeout = window.setTimeout(() => failWithTimeout("total"), options.timeoutMs || diagnosticUploadTimeoutMs);
+    let inactivityTimeout = window.setTimeout(() => failWithTimeout("inactivity"), diagnosticUploadInactivityTimeoutMs);
 
     task.on(
       "state_changed",
       (snapshot) => {
+        resetInactivityTimeout();
         if (!firstProgressSeen) {
           firstProgressSeen = true;
           options.onEvent?.("storage_upload_first_progress", {
@@ -124,29 +154,23 @@ export async function uploadDiagnosticPhoto(
       (error) => {
         settled = true;
         firebaseError = error;
-        window.clearTimeout(timeout);
+        clearTimers();
         reject(error);
       },
-      async () => {
-        try {
-          const downloadUrl = await getDownloadURL(task.snapshot.ref);
-          settled = true;
-          window.clearTimeout(timeout);
-          options.onEvent?.("storage_upload_completed", {
-            diagnosticId: photo.diagnosticId,
-            photoId: photo.id,
-            storagePath: photo.storagePath
-          });
-          resolve({
-            storagePath: photo.storagePath,
-            downloadUrl
-          });
-        } catch (error) {
-          settled = true;
-          firebaseError = error;
-          window.clearTimeout(timeout);
-          reject(error);
-        }
+      () => {
+        settled = true;
+        clearTimers();
+        options.onEvent?.("storage_upload_completed", {
+          diagnosticId: photo.diagnosticId,
+          photoId: photo.id,
+          storagePath: photo.storagePath,
+          storageBucket,
+          size: file.size,
+          mimeType: file.type
+        });
+        resolve({
+          storagePath: photo.storagePath
+        });
       }
     );
   });
